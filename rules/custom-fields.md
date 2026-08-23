@@ -121,14 +121,56 @@ parent issues via has-sub-issues); `Relates` links are dropped — GitHub has no
 
 ## Mirror Columns (read-only reference)
 
-For migrated issues, historical field content is preserved in
-`jira.issues`: `plan_jira_tracking`, `plan_testing_strategy`, `plan_documentation`,
-`plan_success_criteria`, `plan_risk_assessment`, `verification_criteria_tested`,
-`verification_results_summary`, `pm_*`, `doc_review_*`, `primary_agent`,
-`assigned_agent`, `agent_runtime`, `workflow_phase`, `test_marker`,
-`human_approval_required`. New (post-migration) issues have these NULL — their
-equivalents are the structured comments above, fetched via
-`mcp__github__issue_read` (method `get_comments`).
+> [!WARNING]
+> **Corrected 2026-08-23 (LAB-966 Phase 4).** This section previously stated that
+> historical field content "is preserved" in the `jira.issues.plan_*` /
+> `verification_*` / `pm_*` columns for migrated issues. **Measured, that is false** —
+> those columns are ~1% populated, and treating them as the recovery surface sends you
+> to an empty table. The real surface is `jira.issue_changelog`. The wrong claim cost a
+> session: `plan_*` was queried, returned zero, and 85 issues were written off as
+> unrecoverable when their content was in the changelog all along.
+
+The `jira.issues` columns `plan_jira_tracking`, `plan_testing_strategy`,
+`plan_documentation`, `plan_success_criteria`, `plan_risk_assessment`,
+`verification_*`, `pm_*`, `doc_review_*`, `primary_agent`, `assigned_agent`,
+`agent_runtime`, `workflow_phase`, `test_marker` and `human_approval_required` exist,
+but are **almost entirely empty**. Measured against 1,128 migrated issues
+(1,817 total rows):
+
+| Columns | Rows populated |
+|---------|---------------:|
+| `plan_*` (all five) | **12** — `LAB-101`–`LAB-113`, one two-day window in 2026-03 |
+| `verification_*`, `pm_*`, `primary_agent`, `assigned_agent`, `workflow_phase` | **2** |
+| `doc_review_*`, `test_marker`, `human_approval_required` | **0** |
+
+**Use `jira.issue_changelog` instead.** Jira's change history was mirrored, so the last
+value of an edited field survives even though the issue body did not. It retains **34
+distinct fields** and covers an order of magnitude more issues:
+
+| Field | Issues with recoverable content |
+|-------|--------------------------------:|
+| `description` | **184** |
+| `Plan: Jira Tracking` / `Plan: Documentation` | **130** each |
+| `labels` | 133 |
+
+```sql
+-- Recover a field's last surviving value
+SELECT DISTINCT ON (issue_key) issue_key, to_string
+FROM jira.issue_changelog
+WHERE field = 'description'      -- or any of the 34 fields
+ORDER BY issue_key, changed_at DESC;
+```
+
+**Caveat that bounds the whole surface:** the changelog only captured *edits inside its
+sync window* (roughly 2026-02-28 → 2026-04-24). A field set once at creation and never
+edited has no row, and is genuinely gone. That is why some issues are recoverable and
+others are not — it is not random, and it is not worth re-deriving per issue.
+
+Recovery status and the remaining sweep: `fredabood/homelab#1479`. Full recovery-surface
+map: `submodules/memory/homelab/research/jira-content-recovery-map.md`.
+
+New (post-migration) issues have all of these NULL by design — their equivalents are the
+structured comments above, fetched via `mcp__github__issue_read` (method `get_comments`).
 
 ## Usage
 
