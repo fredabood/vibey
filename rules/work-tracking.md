@@ -80,6 +80,83 @@ If the issue already has an `Assigned Agent:` comment (most recent wins):
 - **Same agent:** Resume normally
 - **Different agent:** Warn the user that another agent claimed this issue — ask whether to override or pick a different issue
 
+## Won't Do close-out (service and deployment cancellations)
+
+Closing an issue `not_planned` ends the *tracking*. It does not remove the artifacts the cancelled
+work already landed, and nothing else in this file says to. Cancelled-but-present artifacts read as
+**live** to the next agent: a stack file that still exists is a service that was going to be deployed,
+and the repo carries no signal distinguishing that from one that is.
+
+**Scope of this section:** it applies when closing an issue as `not_planned` where work already
+touched the repo or the fleet — in practice, issues carrying the `deployment` label, and any
+`platform`/`pipeline` issue that landed a stack file, a route, a runbook, or an env var. It does
+**not** apply to a Won't Do on work that never started; there is nothing to retire, and saying so in
+the close comment takes one line.
+
+Before closing, walk the table and record the disposition of **every** row in the closing comment.
+The point is not that every row applies — most cancellations touch three or four. The point is that
+each was *considered*, so a later reader can tell `N/A` from *not looked at*.
+
+| Artifact | Where | Disposition to record |
+|---|---|---|
+| Stack file | `stacks/<name>.yml` | Retire per `stacks/DEPRECATED_STACKS.md` — `git mv` to `<name>.yml.deprecated` so it leaves the `stacks/*.yml` glob, and add a tombstone entry to that file |
+| Runbook | `docs/operations/<name>.md` | Retirement banner at the top (state the issue, the date, and that it is a design record — not operating instructions), or delete |
+| Service catalog | `.claude/rules/homelab-services.md` | Remove the service-catalog row **and** the stack-list entry — both, they are separate places |
+| Homepage tile | `homelab-data/homepage/services.yaml` | Remove the entry (and the group from `settings.yaml` if it was the last member) |
+| Caddy route | `internal/caddy/Caddyfile` | Remove. Do **not** merely comment out — a commented route in the public site block is a one-`reload` publish waiting to happen (#1386, and the radicale tombstone that documents it) |
+| DNS record | Cloudflare | Decide and say which: **leave** (the name 404s) or **remove**. Both are fine; silence is not |
+| Images / volumes | `docker images` / `docker volume ls` | Record whether the image is **rebuildable** (in a registry, or from a retained build context) and whether volumes are **preserved or dropped**. A locally-built image that is in no registry and whose build context is deleted is gone for good |
+| Env vars | `.env.tpl` **and** `.env.example` | Remove the service's vars from both, especially any `:?`-required ones. This is the security row: a cancelled service's credential template is a standing instruction to mint a credential nobody wants |
+| Build context | `internal/<name>/` | Retain (reproducible) or delete — record which, and why |
+| Scanner / CI config | `.trivyignore.yaml`, `ci/test-allowlist.json`, `internal/scripts/docker-cleanup.sh` | Remove any path-scoped entry that now points at a retired artifact, or note why it stays |
+
+**Why the env-var row is not hypothetical.** OpenDraft was closed Won't Do on 2026-08-12 (#1062,
+#1045, #1063). A week later its stack file was still present and was **the only one of 20 that failed
+compose resolution** — `required variable GOOGLE_API_KEY is missing a value`, because #1063 had
+declined to mint the key. An unresolvable stack contributes an empty keep-set to
+`docker-cleanup.sh`, so it was also an *unprotected* stack: the 1.6 GB locally-built image had
+already been deleted. A session that found this filed #1304 as a credential-provisioning bug, having
+no way to know the service was cancelled — the fix it was heading for would have minted a Gemini key
+and deployed an abandoned service. `GOOGLE_API_KEY` was the one `:?`-required var missing from
+`.env.tpl` across all 52; retiring the stack took that class to zero.
+
+**Recording the dispositions.** Post them as a comment on the issue before closing, under a
+`## Won't Do Close-Out` marker, one line per row:
+
+```text
+## Won't Do Close-Out
+
+- Stack file: retired → `stacks/opendraft-stack.yml.deprecated` (+ DEPRECATED_STACKS.md entry)
+- Runbook: banner added, `docs/operations/opendraft.md`
+- Service catalog: 2 rows removed
+- Homepage tile: N/A — never had one (batch CLI, no web UI)
+- Caddy route: N/A — never had one
+- DNS record: N/A — no subdomain was ever created
+- Images / volumes: image `homelab/opendraft:1.7.4` already deleted; no volumes; rebuildable from
+  the retained build context
+- Env vars: `GOOGLE_API_KEY` deliberately NOT added to `.env.tpl` — #1063 declined it
+- Build context: retained (`internal/opendraft/`) — the image is in no registry
+- Scanner / CI config: `.trivyignore.yaml` still path-scopes `internal/opendraft/Dockerfile`; kept,
+  because the build context is retained
+```
+
+`N/A` is a valid answer on any row. An absent row is not.
+
+**Retiring the stack file is the load-bearing step.** Everything else is documentation drift; the
+`.yml` → `.yml.deprecated` rename is what stops the file from being resolved, cleaned, scanned and
+read as live by every tool that globs `stacks/*.yml`.
+
+**What this is not.** It is a checklist, not a script — nothing here automates the removal. And it
+does not apply to the `completed` path, which already has `/complete-task`, verification reports and
+post-mortems.
+
+**Enforcement, stated honestly.** This is a **soft** gate: `/complete-task` prompts for the checklist
+on a `not_planned` close of a `deployment`-labelled issue, and nothing else does. A close made
+through raw `gh issue close --reason not_planned` bypasses it entirely — which is exactly what
+happened to 34 issues during the LAB-966 audit. A hard hook gate was deliberately deferred (#1361):
+gating on a `## Won't Do Close-Out` comment before anything produces one is how "authorised
+bypasses" get manufactured. Once the marker is routinely present, the gate becomes cheap.
+
 ## Suggesting next work (Planned+Unblocked agent queue)
 
 When an issue is completed or the user asks what to work on next, use the agent work queue

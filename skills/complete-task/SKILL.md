@@ -15,6 +15,8 @@ Run: `bash "${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/lib/skill-marker.sh" set comp
 
 Finish work on a GitHub issue. Verifies acceptance criteria, runs quality checks, posts a summary and post-mortem, and advances the issue — board Status "Implementation Complete" by default, or close as completed for terminal Done.
 
+Cancelling instead of finishing takes a different path: see **Won't Do closes** below, which prompts the artifact close-out checklist rather than the verification/post-mortem sequence.
+
 ## Usage
 
 ```
@@ -120,7 +122,9 @@ Post using `mcp__github__add_issue_comment`. There are no custom fields on GitHu
 
 This leaves the issue open for `/review-ticket` (docs + memory + testing verification) before terminal close.
 
-**Terminal Done (only when the user wants to skip the review stage or the review has already passed):** close the issue with `mcp__github__issue_write` — `state: closed`, `state_reason: completed`. Closing removes it from the board (D5 prune). Never use `state_reason: not_planned` here — that means Won't Do.
+**Terminal Done (only when the user wants to skip the review stage or the review has already passed):** close the issue with `mcp__github__issue_write` — `state: closed`, `state_reason: completed`. Closing removes it from the board (D5 prune).
+
+`state_reason: not_planned` is **not** the completion path — it means Won't Do, and the work was cancelled rather than finished. Do not reach for it to make a stalled issue go away. If the user does want a Won't Do close, jump to the Won't Do section below instead of continuing through Steps 8–11.
 
 ### Step 8: Check parent epic
 
@@ -142,10 +146,39 @@ If follow-up items were identified in the post-mortem:
 
 Confirm completion with a brief summary (issue number, mirror key, new status, verification result).
 
+## Won't Do closes (`state_reason: not_planned`)
+
+A Won't Do close cancels the work. Steps 2–6 do not apply — there is nothing to verify and no
+post-mortem of a thing that was not built. What replaces them is the close-out checklist, because
+cancelling the *tracking* does not remove the artifacts the work already landed, and a
+cancelled-but-present artifact reads as live to the next agent.
+
+**This is a soft prompt, not a gate.** Nothing blocks a `not_planned` close today (LAB-1361 ruled a
+hard hook gate a follow-up). Run the prompt anyway — it is the only thing standing between a
+cancellation and a stack file that still fails `compose config` a week later (#1304).
+
+1. **Read the issue's labels** — `mcp__github__issue_read` (method `get`).
+2. **If the issue carries the `deployment` label** (or it is a `platform`/`pipeline` issue that
+   landed a stack file, a route, a runbook, or an env var), **prompt the user with the artifact
+   checklist** from `.claude/rules/work-tracking.md` → *Won't Do close-out*: stack file, runbook,
+   service catalog, homepage tile, Caddy route, DNS record, images/volumes, env vars
+   (`.env.tpl` **and** `.env.example` — the security row), build context, scanner/CI config.
+3. **Record a disposition for every row**, not just the ones that apply. `N/A` is a valid answer;
+   an absent row is not — that distinction is the whole point, because it is what lets a later
+   reader tell "considered and irrelevant" from "never looked at".
+4. **Post the dispositions** as a comment under the `## Won't Do Close-Out` marker
+   (`mcp__github__add_issue_comment`) **before** closing. That marker is the artifact a future hard
+   gate would key on, so emit it even when every row is `N/A`.
+5. **If the work never started** — no repo or fleet artifact exists — say exactly that in one line
+   under the same marker and skip the table. Do not skip the comment.
+6. **Then close:** `mcp__github__issue_write` — `state: closed`, `state_reason: not_planned`.
+   Closing removes the issue from the board (D5 prune).
+
 ## Required Tools
 
 - `mcp__github__issue_read` (method: get, get_comments, get_sub_issues)
-- `mcp__github__issue_write` (body checkbox updates; close with `state_reason: completed`)
+- `mcp__github__issue_write` (body checkbox updates; close with `state_reason: completed`, or
+  `not_planned` for a Won't Do — see the Won't Do section)
 - `mcp__github__projects_get` / `mcp__github__projects_write` (board Status)
 - `mcp__github__add_issue_comment` (verification report, summary, post-mortem)
 - `mcp__github__search_issues` / `mcp__github__sub_issue_write` — for follow-ups
