@@ -19,8 +19,11 @@
 # It reuses internal/scripts/discover-test-suites.sh — the same discovery the CI
 # matrix uses — so local and CI cannot drift apart.
 #
-# Disposable by design: this is a Claude Code hook and is retired with the rest of
-# that layer at the Omnigent cutover (#1382). Kept deliberately small.
+# NOT disposable, as of #1382 (2026-08-23). This file used to say it would be retired
+# with the rest of the Claude Code layer at the Omnigent cutover; that decision was
+# evaluated and went the other way — the layer is KEPT, because it guards the surface
+# this repo is actually worked in and Omnigent's own policies cannot reach a session
+# Omnigent does not run. Still deliberately small.
 
 set -uo pipefail
 
@@ -40,6 +43,21 @@ if [ ! -x "$DISCOVER" ] && [ ! -f "$DISCOVER" ]; then
 fi
 
 staged="$(git diff --cached --name-only 2>/dev/null || true)"
+
+# The .claude submodule's own index (LAB-1455). `git diff --cached` in the PARENT never
+# reports a file inside a submodule — it reports the gitlink, if that moved at all. So a
+# commit that edits a hook staged `hooks/foo.sh` in .claude's index and this gate saw
+# nothing, concluded "staged files own no test suite", and allowed it. The one suite
+# guarding the gates themselves was therefore unreachable from here even after the bash
+# branch existed. Prefixed to match discovery, which collects .claude's test files the
+# same way and for the same reason.
+if [ -e ".claude/.git" ]; then
+  claude_staged="$(git -C .claude diff --cached --name-only 2>/dev/null | sed 's|^|.claude/|' || true)"
+  if [ -n "$claude_staged" ]; then
+    staged="$(printf '%s\n%s' "$staged" "$claude_staged" | grep -v '^$' || true)"
+  fi
+fi
+
 if [ -z "$staged" ]; then
   echo "[pre-commit-tests] nothing staged — no suite to run."
   exit 0
@@ -77,7 +95,35 @@ while IFS= read -r dir; do
 
   echo "[pre-commit-tests] running $kind suite for $dir"
 
-  if [ "$kind" = node ]; then
+  if [ "$kind" = bash ]; then
+    # LAB-1455. Until this branch existed there was no `bash` case at all: shell suites
+    # fell through to the pytest path, where `--collect-only` exits 5 because pytest does
+    # not collect .sh files. That was read as "could not be COLLECTED (usually missing
+    # deps)" and skipped — so .claude/hooks (7 suites, including worktree-gate's 109
+    # assertions), validate-ports and deploy-range have NEVER run in this gate, while it
+    # printed a reason that was not the reason.
+    #
+    # The glob mirrors tests.yml exactly, so local and CI cannot disagree about which
+    # files are the suite. Nothing to install: bash and git are already here.
+    found=0
+    for t in "$dir"/tests/*.test.sh; do
+      [ -f "$t" ] || continue
+      found=$((found + 1))
+      # Output only on failure: a passing gate should be quiet, a failing one should say
+      # which assertion broke rather than making you re-run it by hand.
+      if ! out="$(bash "$t" 2>&1)"; then
+        echo "[pre-commit-tests] FAILED: $t" >&2
+        printf '%s\n' "$out" | tail -20 >&2
+        status=1
+      fi
+    done
+    if [ "$found" -eq 0 ]; then
+      # Discovery emits a bash suite only when it found a tests/*.test.sh, so zero here
+      # means the two disagree. Loud, not skipped — the same stance tests.yml takes.
+      echo "[pre-commit-tests] $dir: discovery says bash, but no tests/*.test.sh found." >&2
+      status=1
+    fi
+  elif [ "$kind" = node ]; then
     if [ ! -d "$dir/node_modules" ]; then
       echo "[pre-commit-tests] $dir has no node_modules — SKIPPED (not a pass). Run npm install." >&2
       continue
