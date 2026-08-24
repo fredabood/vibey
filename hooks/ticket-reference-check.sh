@@ -26,6 +26,7 @@ if 'git commit' not in cmd:
 
 # Extract commit message using shlex
 msg = ''
+parts = []
 try:
     parts = shlex.split(cmd)
     for i, part in enumerate(parts):
@@ -34,6 +35,35 @@ try:
             break
 except ValueError:
     pass
+
+# -F / --file: the message lives in a FILE, and this check used to inspect only the
+# command string. A commit whose message began 'LAB-1495:' was therefore reported as
+# having no reference — the file was never opened. -F is not exotic; it is how any commit
+# with a body longer than a line gets written, which is exactly what this repo's own
+# convention asks for. Measured 2026-08-24 (LAB-1495).
+#
+# This must not become a bypass. An unreadable or missing file, and '-F -' (stdin, which
+# cannot be read from here by construction), all fall through to the same 'no reference'
+# path as before.
+if not msg:
+    path = ''
+    for i, part in enumerate(parts):
+        if part in ('-F', '--file') and i + 1 < len(parts):
+            path = parts[i + 1]
+            break
+        if part.startswith('--file='):
+            path = part.split('=', 1)[1]
+            break
+    if path and path != '-':
+        try:
+            with open(path, encoding='utf-8', errors='replace') as fh:
+                for line in fh:
+                    line = line.strip()
+                    if line:
+                        msg = line
+                        break
+        except OSError:
+            pass
 
 if not msg:
     # Fallback: heredoc pattern

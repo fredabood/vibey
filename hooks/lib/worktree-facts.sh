@@ -143,3 +143,48 @@ wf_mode() {
   wf_in_scope "$dir" || { echo OUT_OF_SCOPE; return 0; }
   if wf_is_worktree "$dir"; then echo WORKTREE; else echo PRIMARY; fi
 }
+
+# ------------------------------------------------- .claude submodule repair ---
+#
+# A fresh worktree checks out the .claude GITLINK without populating it, so `.claude/`
+# arrives EMPTY and the session has no project hooks, rules, skills or agents. Worse than
+# absent: the hooks are still REGISTERED (project settings were read from the directory
+# the session started in), so every gated tool call fails with a path that does not exist.
+#
+# session-bootstrap.sh has repaired this since LAB-1364 — but it is a SessionStart hook,
+# and `EnterWorktree` switches directories MID-session, which does not re-fire SessionStart.
+# So the repair existed and was unreachable on the very path CLAUDE.md recommends
+# ("ask to work in a worktree"). Measured 2026-08-24: entering a worktree that way left
+# ticket-reference-check.sh blocking every commit until `git submodule update --init
+# .claude` was run by hand.
+#
+# It lives here, in the lib both hooks already source, rather than in a new file: the
+# installer copies a FIXED list of files, so a new one would give a stale install a gate
+# that sources something absent. For a gate, failing to load is not an acceptable
+# failure mode.
+
+# True when .claude is present as a directory and empty.
+wf_claude_unpopulated() {
+  local root="$1"
+  [ -n "$root" ] || return 1
+  [ -d "$root/.claude" ] || return 1
+  [ -z "$(ls -A "$root/.claude" 2>/dev/null)" ]
+}
+
+# One attempt per session. A genuine failure — offline, or no credentials for the clone —
+# must not re-run on every PreToolUse call for the rest of the session.
+wf_claude_repair_marker() {
+  local sid
+  sid="$(printf '%s' "${1:-nosession}" | tr -c 'A-Za-z0-9_.-' '_')"
+  printf '%s/wf-claude-repair-%s' "${TMPDIR:-/tmp}" "$sid"
+}
+
+# Returns 0 only when it actually populated the submodule.
+wf_claude_repair_once() {
+  local root="$1" sid="${2:-}" marker
+  wf_claude_unpopulated "$root" || return 1
+  marker="$(wf_claude_repair_marker "$sid")"
+  [ -e "$marker" ] && return 1
+  : >"$marker" 2>/dev/null || true
+  git -C "$root" submodule update --init .claude >/dev/null 2>&1
+}

@@ -95,6 +95,95 @@ segment_invokes() {
     grep -qE "^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*(sudo[[:space:]]+)?($2)\b"
 }
 
+# The git SUBCOMMAND of each segment whose head is `git`, one line per segment, emitted
+# as "<subcommand> <remaining args>".
+#
+# WHY NOT A REGEX (LAB-1482)
+# --------------------------
+# The old pattern was `git[^;|&]*\b(commit|merge|...)\b`: anchored at `git`, then free to
+# find the verb ANYWHERE later in the segment. And `-` is a word boundary in ERE. Measured
+# in a live session, all three of these read-only commands were REFUSED:
+#
+#   git merge-base --is-ancestor a b     \bmerge\b matches inside `merge-base`
+#   git stash list                       a read-only form of a writing verb
+#   git apply --check p.patch            likewise
+#
+# `git log --merges` and `git branch --merged` escaped only because \bmerge\b does not
+# match a plural or a participle. That is luck, not a rule, and the next verb to grow a
+# hyphenated sibling would have been refused too.
+#
+# Taking the subcommand as a WHOLE TOKEN in the subcommand position fixes the class, not
+# the three instances.
+git_subcommands() {
+  # `|| [ -n "$seg" ]` is load-bearing: cmd_segments ends its output with printf '%s', so
+  # the LAST segment carries no trailing newline and a bare `read` drops it. For a
+  # single-segment command that is every segment. segment_invokes never noticed because
+  # grep reads a final partial line happily; `read` does not.
+  cmd_segments "$1" | while IFS= read -r seg || [ -n "$seg" ]; do
+    seg="$(printf '%s' "$seg" |
+      sed -E 's/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*//; s/^[[:space:]]*(sudo[[:space:]]+)?//')"
+    case "$seg" in git | git[[:space:]]*) : ;; *) continue ;; esac
+    # shellcheck disable=SC2086
+    set -- $seg
+    shift
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        # Global flags that take a separate value.
+        -C | -c | --git-dir | --work-tree | --namespace | --exec-path)
+          shift
+          [ "$#" -gt 0 ] && shift
+          continue
+          ;;
+        -*) shift; continue ;;
+        *) printf '%s\n' "$*"; break ;;
+      esac
+    done
+  done
+}
+
+# True when some segment invokes a git subcommand that moves HEAD or writes history.
+# Read-only forms of otherwise-writing verbs are carved out here, the same way
+# `git checkout -- <path>` is carved out below.
+git_invokes_write() {
+  local rest sub args second
+  while IFS= read -r rest; do
+    [ -n "$rest" ] || continue
+    sub="${rest%% *}"
+    args="${rest#"$sub"}"
+    case "$sub" in
+      commit | merge | rebase | reset | cherry-pick | push | am | revert) return 0 ;;
+      stash)
+        # `stash list` / `stash show` only read. Bare `stash`, and push/pop/apply/drop/
+        # clear/branch, all write.
+        second="$(printf '%s' "$args" | awk '{print $1}')"
+        case "$second" in list | show) continue ;; *) return 0 ;; esac
+        ;;
+      apply)
+        # --check/--stat/--summary/--numstat report without touching the tree.
+        printf '%s' "$args" |
+          grep -qE '(^|[[:space:]])--(check|stat|summary|numstat)([[:space:]]|$)' && continue
+        return 0
+        ;;
+    esac
+  done <<EOF
+$(git_subcommands "$1")
+EOF
+  return 1
+}
+
+# Branch switching moves the shared HEAD. Separate from the above because it carries its
+# own `-- <path>` exception.
+git_invokes_switch() {
+  local rest
+  while IFS= read -r rest; do
+    [ -n "$rest" ] || continue
+    case "${rest%% *}" in checkout | switch) return 0 ;; esac
+  done <<EOF
+$(git_subcommands "$1")
+EOF
+  return 1
+}
+
 # Normalize ONE segment so the verb that actually runs sits at its head.
 #
 # Anchoring the verb match (segment_invokes) fixed prose-as-invocation but created the
@@ -152,10 +241,22 @@ EOF
   printf '%s' "$out"
 }
 
-# Shell verbs that write files, and git verbs that move HEAD or write history. Shared by
-# the primary-checkout rules and the worktree redirect guard so the two cannot drift apart.
-MUTATORS_ALL='(rm|mv|cp|tee|dd|truncate|install|sed[^;|&]*-i)\b'
-GIT_WRITE_ALL='git[^;|&]*\b(commit|merge|rebase|reset|cherry-pick|stash|push|am|apply|revert|checkout|switch)\b'
+# Shell verbs that write files. Shared by the primary-checkout rules and the worktree
+# redirect guard so the two cannot drift apart.
+#
+# touch/mkdir/ln/chmod/chown added 2026-08-24 (LAB-1482). Measured in a live session with
+# this gate installed and firing, they were ALL permitted against the primary checkout
+# while rm/mv/cp/tee/dd/sed -i were refused. The asymmetry was the tell: the gate stopped
+# you DESTROYING a file in the shared checkout but not CREATING one, REPLACING it with a
+# symlink, or changing its mode.
+#
+# `ln` is the one that mattered. `ln -sf /anywhere <repo>/stacks/core-stack.yml` succeeds,
+# and that checkout is bind-mounted into running containers — precisely the harm this
+# gate's own block message describes. Blocking the verb outright is right: `ln -sf`
+# replaces, plain `ln` onto an existing target fails, and this is a discipline gate rather
+# than a hardened surface. `install` was already here, which is the precedent — the bar is
+# "can it mutate a path", not "is it commonly typed".
+MUTATORS_ALL='(rm|mv|cp|tee|dd|truncate|install|touch|mkdir|ln|chmod|chown|sed[^;|&]*-i)\b'
 
 # ------------------------------------------------- anti-self-tamper (always) ---
 # Checked BEFORE the mode short-circuit: the installed gate lives in ~/.claude, which is
@@ -198,6 +299,22 @@ fi
 
 MODE="$(wf_mode "$CWD")"
 
+# A worktree whose .claude never got populated has NO project hooks — and they are still
+# registered, so every gated call fails on a missing path instead of being evaluated.
+# session-bootstrap.sh repairs this, but it only runs at SessionStart, and EnterWorktree
+# switches directories mid-session. This gate is user-level and fires on every Bash and
+# edit call, which makes it the only place that can still reach the problem (LAB-1495).
+#
+# Cost on the normal path is one `[ -d ]` test: wf_claude_unpopulated returns immediately
+# unless .claude exists AND is empty.
+if [ "$MODE" = WORKTREE ] && command -v wf_claude_repair_once >/dev/null 2>&1; then
+  SID="$(printf '%s' "$PAYLOAD" | jq -r '.session_id // empty' 2>/dev/null)"
+  if wf_claude_repair_once "$(wf_repo_root "$CWD" 2>/dev/null)" "$SID"; then
+    echo "[$GATE_NAME] .claude was empty in this worktree and has been initialized." >&2
+    echo "Project hooks, rules and skills are now loaded." >&2
+  fi
+fi
+
 # ------------------------------------------- worktree: guard the shared checkout ---
 # Claude Code's native isolation covers a session that entered a worktree via
 # EnterWorktree or --worktree. It does NOT cover a session that merely `cd`-ed into one
@@ -230,7 +347,8 @@ $CODE"
       # is a read and must stay allowed, or the session cannot even look at the checkout
       # it deploys from.
       FORMS='-C[[:space:]]+|--git-dir[= ]|--work-tree[= ]|GIT_DIR=|GIT_WORK_TREE='
-      if segment_invokes "$CODE" "$GIT_WRITE_ALL" || segment_invokes "$CODE" "$MUTATORS_ALL"; then
+      if git_invokes_write "$CODE" || git_invokes_switch "$CODE" ||
+        segment_invokes "$CODE" "$MUTATORS_ALL"; then
         FORMS="$FORMS|(^|[[:space:]])cd[[:space:]]+"
       fi
       # Extract the OPERAND of each redirect form and resolve it, rather than matching the
@@ -313,12 +431,11 @@ case "$TOOL" in
     # `\bgit[^;|&]*\bcommit\b` anywhere, which blocked a `gh issue edit` whose body text
     # contained the words "git commit" — strip_quotes could not remove it because the
     # quoted span crossed newlines and sed works line by line.
-    GIT_WRITE='git[^;|&]*\b(commit|merge|rebase|reset|cherry-pick|stash|push|am|apply|revert)\b'
-    if segment_invokes "$CODE" "$GIT_WRITE"; then
+    if git_invokes_write "$CODE"; then
       block "a history-moving git command in the primary checkout."
     fi
     # Branch switching moves the shared HEAD — the exact failure this gate exists to stop.
-    if segment_invokes "$CODE" 'git[^;|&]*\b(checkout|switch)\b'; then
+    if git_invokes_switch "$CODE"; then
       # `git checkout -- <path>` and `git checkout <sha> -- <path>` restore files without
       # moving HEAD; they are how a deploy mirror recovers a clobbered bind-mounted config.
       printf '%s' "$CODE" | grep -qE '\bgit[^;|&]*\b(checkout|switch)\b[^;|&]*--[[:space:]]' ||
@@ -335,7 +452,8 @@ case "$TOOL" in
 
       is_target() { # $1 token, $2 "redirect"|"word"
         case "$1" in
-          rm | mv | cp | tee | sed | dd | truncate | install | echo | cat | printf | git | gh | \
+          rm | mv | cp | tee | sed | dd | truncate | install | touch | mkdir | ln | chmod | \
+            chown | echo | cat | printf | git | gh | \
             docker | sudo | env | bash | sh | python3 | jq | then | do | fi | done | if | else) return 1 ;;
           *=*) return 1 ;;
         esac
@@ -389,10 +507,29 @@ case "$TOOL" in
         OPERANDS="$(printf '%s' "$seg" | grep -oE '[^[:space:]]+' | grep -vE '^[->]' | tail -n +2 || true)"
 
         case "$HEAD" in
-          cp | install | mv)
+          cp | install | mv | ln)
             # Destination: written, so it counts even if it does not exist yet.
             LAST="$(printf '%s' "$seg" | awk '{print $NF}')"
             is_target "$LAST" dest && check_tok "$LAST"
+            ;;
+        esac
+        # `ln -s <target>` with no destination creates the link in the CWD, which in this
+        # branch IS the primary checkout. The destination is implicit, so there is no token
+        # to resolve — check the cwd itself rather than letting it through unexamined.
+        if [ "$HEAD" = ln ] && [ "$(printf '%s' "$OPERANDS" | wc -w | tr -d ' ')" -lt 2 ]; then
+          check_tok "."
+        fi
+        [ "$VERDICT" = block ] && break
+        case "$HEAD" in
+          touch | mkdir | chmod | chown)
+            # Every operand is written: touch/mkdir create, chmod/chown mutate metadata.
+            # `word` rather than `dest` on purpose — a mode or owner argument (600, u:g) is
+            # not a path, and `word` requires a relative token to EXIST before it counts, so
+            # `chmod 600 /tmp/x` from inside the repo is not read as touching ./600.
+            for t in $OPERANDS; do
+              [ "$VERDICT" = block ] && break
+              is_target "$t" word && check_tok "$t"
+            done
             ;;
         esac
         [ "$VERDICT" = block ] && break
