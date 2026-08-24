@@ -36,14 +36,16 @@ NOTES=""
 add() { NOTES="${NOTES}${NOTES:+$'\n'}$1"; }
 
 # ------------------------------------------------ 1. repair an empty .claude ---
-if [ "$MODE" = WORKTREE ] && [ -d "$ROOT/.claude" ]; then
-  if [ -z "$(ls -A "$ROOT/.claude" 2>/dev/null)" ]; then
-    # Never clobber: only initialize when the submodule has nothing of its own.
-    if git -C "$ROOT" submodule update --init .claude >/dev/null 2>&1; then
-      add "Bootstrapped the .claude submodule in this worktree (it checks out empty, which would otherwise leave the session with no project hooks, rules, or skills)."
-    else
-      add "WARNING: .claude is empty in this worktree and 'git submodule update --init .claude' failed. Project hooks, rules, and skills are NOT loaded. Run it by hand."
-    fi
+# Shared with worktree-gate.sh via lib/worktree-facts.sh so the two cannot drift, and so
+# the repair is reachable on BOTH paths: SessionStart (a session launched in a worktree)
+# and PreToolUse (a session that entered one mid-flight via EnterWorktree, which does not
+# re-fire SessionStart — LAB-1495).
+if [ "$MODE" = WORKTREE ] && wf_claude_unpopulated "$ROOT"; then
+  SID="$(printf '%s' "$PAYLOAD" | jq -r '.session_id // empty' 2>/dev/null)"
+  if wf_claude_repair_once "$ROOT" "$SID"; then
+    add "Bootstrapped the .claude submodule in this worktree (it checks out empty, which would otherwise leave the session with no project hooks, rules, or skills)."
+  else
+    add "WARNING: .claude is empty in this worktree and 'git submodule update --init .claude' failed. Project hooks, rules, and skills are NOT loaded. Run it by hand."
   fi
 fi
 

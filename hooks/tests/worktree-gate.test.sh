@@ -35,7 +35,7 @@ export WF_SCOPE_REPO=homelab
 
 PRIMARY="$SANDBOX/homelab"
 mkdir -p "$PRIMARY"
-cd "$PRIMARY"
+cd "$PRIMARY" || { echo "cannot enter the sandbox primary checkout" >&2; exit 1; }
 git init -q -b main
 git config user.email t@t && git config user.name t
 git remote add origin https://github.com/fredabood/homelab.git
@@ -132,6 +132,30 @@ expect "mv of a repo file blocked" 2 "$GATE" "$(bash_payload 'mv README.md OLD.m
 expect "tee into a repo file blocked" 2 "$GATE" "$(bash_payload 'echo x | tee README.md' "$PRIMARY")"
 expect "unresolvable variable target blocked (fails closed)" 2 "$GATE" "$(bash_payload 'rm -rf $SOMEDIR' "$PRIMARY")"
 
+# LAB-1482. Every one of these was ALLOWED against the primary checkout while rm/mv/cp
+# were refused — the gate stopped you destroying a file in the shared checkout but not
+# creating one, replacing it with a symlink, or changing its mode.
+expect "touch a new repo file blocked" 2 "$GATE" "$(bash_payload 'touch newfile.txt' "$PRIMARY")"
+expect "touch an absolute repo path blocked" 2 "$GATE" "$(bash_payload "touch $PRIMARY/newfile.txt" "$PRIMARY")"
+expect "mkdir in the repo blocked" 2 "$GATE" "$(bash_payload 'mkdir newdir' "$PRIMARY")"
+expect "chmod on a repo file blocked" 2 "$GATE" "$(bash_payload 'chmod 600 internal/caddy/Caddyfile' "$PRIMARY")"
+expect "chown on a repo file blocked" 2 "$GATE" "$(bash_payload 'chown root README.md' "$PRIMARY")"
+# The concrete harm: that Caddyfile is bind-mounted into a running container.
+expect "ln -sf REPLACING a bind-mounted config blocked" 2 "$GATE" "$(bash_payload 'ln -sf /tmp/evil internal/caddy/Caddyfile' "$PRIMARY")"
+expect "ln -sf onto an absolute repo path blocked" 2 "$GATE" "$(bash_payload "ln -sf /tmp/evil $PRIMARY/stacks/core-stack.yml" "$PRIMARY")"
+# `ln -s <target>` links into the CWD, which here IS the primary checkout. The
+# destination is implicit, so there is no token to resolve — it must not slip through.
+expect "ln -s with an implicit destination blocked" 2 "$GATE" "$(bash_payload 'ln -s /tmp/target' "$PRIMARY")"
+
+# The carve-outs below must not leak into the writing forms.
+expect "git stash pop still blocked" 2 "$GATE" "$(bash_payload 'git stash pop' "$PRIMARY")"
+expect "git stash apply still blocked" 2 "$GATE" "$(bash_payload 'git stash apply' "$PRIMARY")"
+expect "git apply without --check still blocked" 2 "$GATE" "$(bash_payload 'git apply p.patch' "$PRIMARY")"
+expect "git am still blocked" 2 "$GATE" "$(bash_payload 'git am p.patch' "$PRIMARY")"
+expect "git reset --hard still blocked" 2 "$GATE" "$(bash_payload 'git reset --hard origin/main' "$PRIMARY")"
+expect "git revert still blocked" 2 "$GATE" "$(bash_payload 'git revert HEAD' "$PRIMARY")"
+expect "git cherry-pick still blocked" 2 "$GATE" "$(bash_payload 'git cherry-pick abc123' "$PRIMARY")"
+
 # =========================================================== allows in primary
 echo "allows in the primary checkout (deploys happen here):"
 expect "docker compose ps allowed" 0 "$GATE" "$(bash_payload 'docker compose -f stacks/core-stack.yml --env-file .env ps' "$PRIMARY")"
@@ -150,11 +174,40 @@ expect "Edit outside the repo allowed" 0 "$GATE" "$(edit_payload "/tmp/scratch.m
 expect "quoted verb in a commit message is not a commit" 0 "$GATE" "$(bash_payload 'echo "how to git commit and git push" > /tmp/notes.md' "$PRIMARY")"
 expect "read-only command allowed" 0 "$GATE" "$(bash_payload 'cat README.md' "$PRIMARY")"
 
+# LAB-1482, the other direction. The old pattern was `git[^;|&]*\b(commit|merge|...)\b` —
+# anchored at `git`, then free to find the verb anywhere later in the segment — and `-` is
+# a word boundary in ERE. All three of these read-only commands were REFUSED, each costing
+# a workaround in a real session. `git log --merges` and `git branch --merged` escaped only
+# because \bmerge\b does not match a plural or a participle, which is luck, not a rule.
+expect "git merge-base allowed (read-only; \\bmerge\\b used to match inside it)" 0 "$GATE" "$(bash_payload 'git merge-base --is-ancestor HEAD origin/main' "$PRIMARY")"
+expect "git stash list allowed (read-only)" 0 "$GATE" "$(bash_payload 'git stash list' "$PRIMARY")"
+expect "git stash show allowed (read-only)" 0 "$GATE" "$(bash_payload 'git stash show' "$PRIMARY")"
+expect "git apply --check allowed (reports, does not apply)" 0 "$GATE" "$(bash_payload 'git apply --check p.patch' "$PRIMARY")"
+expect "git apply --stat allowed" 0 "$GATE" "$(bash_payload 'git apply --stat p.patch' "$PRIMARY")"
+expect "git log --merges allowed" 0 "$GATE" "$(bash_payload 'git log --merges --oneline' "$PRIMARY")"
+expect "git branch --merged allowed" 0 "$GATE" "$(bash_payload 'git branch --merged main' "$PRIMARY")"
+expect "git -C <elsewhere> log allowed (global flag skipped, not read as a verb)" 0 "$GATE" "$(bash_payload 'git -C /tmp/other log --oneline' "$PRIMARY")"
+
+# The new mutators must only bite inside the repo.
+expect "touch outside the repo allowed" 0 "$GATE" "$(bash_payload 'touch /tmp/probe.txt' "$PRIMARY")"
+expect "mkdir outside the repo allowed" 0 "$GATE" "$(bash_payload 'mkdir -p /tmp/probe-dir' "$PRIMARY")"
+expect "chmod outside the repo allowed (mode arg is not a path)" 0 "$GATE" "$(bash_payload 'chmod 600 /tmp/probe.txt' "$PRIMARY")"
+expect "ln -sf outside the repo allowed" 0 "$GATE" "$(bash_payload 'ln -sf /tmp/a /tmp/b' "$PRIMARY")"
+# Anchoring property (see the comment at the MUTATORS_ALL definition): prose mentioning a
+# verb is not an invocation of it. Regressing this makes the gate unusable for writing
+# about itself.
+expect "prose naming the new verbs is not an invocation" 0 "$GATE" "$(bash_payload 'echo "you can touch, chmod or ln -sf a file" > /tmp/notes.md' "$PRIMARY")"
+
 # =================================================================== worktree
 echo "allows in a worktree (native isolation takes over):"
 expect "Edit in a worktree allowed" 0 "$GATE" "$(edit_payload "$SANDBOX/wt/README.md" "$SANDBOX/wt")"
 expect "git commit in a worktree allowed" 0 "$GATE" "$(bash_payload 'git commit -m "x"' "$SANDBOX/wt")"
 expect "sed -i in a worktree allowed" 0 "$GATE" "$(bash_payload 'sed -i "" s/a/b/ README.md' "$SANDBOX/wt")"
+expect "touch in a worktree allowed" 0 "$GATE" "$(bash_payload 'touch newfile.txt' "$SANDBOX/wt")"
+expect "mkdir in a worktree allowed" 0 "$GATE" "$(bash_payload 'mkdir newdir' "$SANDBOX/wt")"
+expect "chmod in a worktree allowed" 0 "$GATE" "$(bash_payload 'chmod 600 README.md' "$SANDBOX/wt")"
+expect "ln -sf in a worktree allowed" 0 "$GATE" "$(bash_payload 'ln -sf /tmp/a README.md' "$SANDBOX/wt")"
+expect "git stash in a worktree allowed" 0 "$GATE" "$(bash_payload 'git stash push -m wip' "$SANDBOX/wt")"
 
 # ================================================================ out of scope
 echo "inert outside fredabood/homelab:"
