@@ -22,7 +22,18 @@
 
 set -u
 
-# Freshness window. Overridable so the test suite can age a marker without sleeping.
+# Freshness window. 600s, and since LAB-1425 it measures IDLE time, not run time: every
+# reader calls skill_marker_touch() on its allow path, so the clock restarts at each
+# sanctioned operation (see that function's header). The claim the number makes is
+# therefore "a live skill run does not go ten minutes without a gated call", not "a run
+# finishes in ten minutes" — the second would have been false for /workflow and for any
+# bulk pass, which is how the window came to be questioned (#1443).
+#
+# Left at 600 deliberately: with refresh-on-use there is no observed case of it firing
+# mid-run, so there is nothing to tune against, and a bigger number would only extend how
+# long an ABANDONED marker keeps authorizing writes.
+#
+# Overridable so the test suite can age a marker without sleeping.
 SKILL_MARKER_TTL="${SKILL_MARKER_TTL:-600}"
 
 skill_marker_dir() {
@@ -42,11 +53,26 @@ skill_marker_slug() { printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_'; }
 # When no session id is available both sides fall back to the project directory, which is
 # exactly the isolation the old marker had — never worse.
 #
-# UNVERIFIED ASSUMPTION, stated deliberately: that a hook subprocess sees the same
-# CLAUDE_CODE_SESSION_ID as the Bash tool. Confirming it needs a probe inside a security
-# hook. If the two ever disagree the reader looks for a file the writer did not create,
-# finds nothing, and BLOCKS — the fail-closed direction. A false block is visible and
-# fixable; a false allow would not be.
+# Session-id agreement between writer and reader: CONFIRMED 2026-08-24 (#1443).
+#
+# The writer resolves its path from CLAUDE_CODE_SESSION_ID as the Bash tool sees it; the
+# readers resolve theirs from the session_id field of the HOOK PAYLOAD — a different source,
+# handed to them by the harness rather than inherited through the environment. Measured
+# twice in one session: a marker written via the Bash tool landed at the real session id's
+# path (cross-checked against the harness-assigned scratchpad path, which the shell cannot
+# influence), and a subsequent gh lifecycle write was ALLOWED by github-skill-gate.sh, which
+# had read that file. The two sources agree.
+#
+# Bounds, so the claim is not over-read: macOS, one harness version, the gh path,
+# github-skill-gate.sh as the reader. It does not prove the invariant across harness
+# versions, and lifecycle-field-check.sh's identical code path was not separately exercised.
+#
+# The design is unchanged and stays fail-closed: on disagreement the reader looks for a file
+# the writer did not create, finds nothing, and BLOCKS. A false block is visible and fixable;
+# a false allow would not be. The project-directory fallback stays CONDITIONAL — #1443's
+# clause to make it unconditional was contingent on the two sources DISAGREEING. Making it
+# unconditional now would loosen the gate: two sessions sharing a checkout could again
+# authorize each other's writes.
 skill_marker_path() {
   local sid="${1:-}"
   [ -n "$sid" ] || sid="${CLAUDE_CODE_SESSION_ID:-}"

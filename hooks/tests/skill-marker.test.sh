@@ -251,6 +251,38 @@ expect_rc 0 $? "SKILL_ALLOW_PRIMARY=1 overrides the refusal"
 ( cd "$PRIMARY" && SKILL_ALLOW_PRIMARY=0 bash "$LIB" require-worktree start-task ) >/dev/null 2>&1
 expect_rc 2 $? "SKILL_ALLOW_PRIMARY=0 does NOT override (only the literal 1 does)"
 
+echo "== the require-worktree set, asserted against the SKILL.md files that SHIP =="
+
+# The guard only refuses skills that actually invoke it, so testing the function alone
+# proves nothing about which skills are guarded. Assert the shipped prompt text (LAB-1426's
+# lesson: a test that builds its own copy cannot catch a defect in the artifact), and
+# assert the guard really refuses for each of those skill names.
+#
+# /handoff joined this set in LAB-1443: its Step 8 writes vault notes, so a primary-rooted
+# run used to fail LATE — after Steps 1-7 had posted issue comments that cannot be retracted.
+SKILLS_DIR="$(cd "$HOOKS_DIR/../skills" 2>/dev/null && pwd)"
+for s in start-task implement-feature workflow complete-task handoff; do
+  f="$SKILLS_DIR/$s/SKILL.md"
+  if [ -f "$f" ] && grep -q "require-worktree $s" "$f"; then
+    ok "/$s SKILL.md invokes require-worktree $s"
+  else
+    no "/$s SKILL.md invokes require-worktree $s" "not found in $f"
+  fi
+  ( cd "$PRIMARY" && bash "$LIB" require-worktree "$s" ) >/dev/null 2>&1
+  expect_rc 2 $? "require-worktree REFUSES /$s in the primary checkout"
+done
+
+# The complement: a skill that legitimately runs from anywhere must NOT have acquired the
+# guard by copy-paste. Without this the loop above passes if every skill is guarded.
+for s in status jira-search create-ticket; do
+  f="$SKILLS_DIR/$s/SKILL.md"
+  if [ -f "$f" ] && grep -q "require-worktree" "$f"; then
+    no "/$s stays runnable from the primary checkout" "unexpected require-worktree in $f"
+  else
+    ok "/$s stays runnable from the primary checkout"
+  fi
+done
+
 echo
 echo "skill-marker tests: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

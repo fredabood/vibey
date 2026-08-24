@@ -6,6 +6,15 @@ user_invocable: true
 
 # /handoff
 
+**This skill does repo work and must run from a worktree.** Before anything else:
+Run: `bash "${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/lib/skill-marker.sh" require-worktree handoff`
+If it exits non-zero, stop and report its message verbatim — do not continue.
+
+Why the *whole* skill refuses when only Step 8 writes to the repo: Steps 1–7 post issue comments,
+which cannot be retracted. Failing at Step 8 leaves comments claiming a continuity the vault does
+not have. For a run that genuinely only posts comments, the refusal message names the override
+(`SKILL_ALLOW_PRIMARY=1`).
+
 **Before any GitHub issue operations**, set the skill execution context marker:
 Run: `bash "${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/lib/skill-marker.sh" set handoff`
 
