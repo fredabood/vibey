@@ -110,8 +110,8 @@ each was *considered*, so a later reader can tell `N/A` from *not looked at*.
 | Build context | `internal/<name>/` | Retain (reproducible) or delete — record which, and why |
 | Scanner / CI config | `.trivyignore.yaml`, `ci/test-allowlist.json`, `internal/scripts/docker-cleanup.sh` | Remove any path-scoped entry that now points at a retired artifact, or note why it stays |
 
-**Why the env-var row is not hypothetical.** OpenDraft was closed Won't Do on 2026-08-12 (#1062,
-#1045, #1063). A week later its stack file was still present and was **the only one of 20 that failed
+**Why the env-var row is not hypothetical.** OpenDraft was closed Won't Do on 2026-08-12
+(#1062, #1045, #1063). A week later its stack file was still present and was **the only one of 20 that failed
 compose resolution** — `required variable GOOGLE_API_KEY is missing a value`, because #1063 had
 declined to mint the key. An unresolvable stack contributes an empty keep-set to
 `docker-cleanup.sh`, so it was also an *unprotected* stack: the 1.6 GB locally-built image had
