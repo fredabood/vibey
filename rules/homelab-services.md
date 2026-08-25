@@ -107,7 +107,7 @@ The staging API gateway (`staging-api.dirtydata.studio`) additionally routes `/s
 - **`wikipedia` schema:** `embed_progress`, `image_metadata_progress` — Wikipedia RAG pipeline progress tracking (LAB-190, migrated from SQLite 2026-04-04)
 - **`domains` schema:** `domains`, `dns_records`, `blockchain_records`, `validation_checks`, `routing`, `events`, `sync_metadata` — unified domain registry for LAB-164 (Domain Management System). Migrations: `internal/domain-manager/migrations/` (`001_domain_schema.sql`, `002_classification_taxonomy.sql`). Control plane: **`mcp-domain-manager`** MCP server (18 tools, port 3101 on Tailscale + `.mcp.json`; `internal/mcp-servers/domain-manager/`). Post-migration state (2026-07-14): all ~45 ICANN domains at **Porkbun**, DNS on **Cloudflare**, GoDaddy exited (LAB-178). Ops doc: `docs/operations/domain-management.md`.
 - **`plane` schema:** (archived) mirror of jira schema from Plane CE experiment — 30-day retention then drop
-- **`public` schema:** pgvector tables for embeddings (`wikipedia_embeddings` for RAG), `migration_key_map` (Jira↔Plane ID mapping), `plane_to_jira_key_map` (reverse migration mapping)
+- **`public` schema:** pgvector tables for embeddings (`wikipedia_embeddings` for RAG), `memories` — the semantic index of the Obsidian vault at `submodules/memory/`, **live-written every 15 minutes** by `internal/scripts/sync-memory-vault.py` under the `com.homelab.vault-sync` launchd job (LAB-1258 moves that job into the n8n `vault-sync` workflow; only one of the two may run) — `migration_key_map` (Jira↔Plane ID mapping), `plane_to_jira_key_map` (reverse migration mapping). `action_logs` was **dropped 2026-08-25** with the Memory Consolidation retirement (LAB-1514): 0 rows lifetime, 0 index scans, and that workflow was its only ever writer.
 - **Connection (from host):** `postgresql://postgres@localhost:5432/agent_memory`
 - **Connection (from container):** `postgresql://postgres@postgres-memory:5432/agent_memory`
 - **MCP postgres-cos is read-only.** For writes: `docker exec postgres-memory psql -U postgres -d agent_memory`
@@ -116,7 +116,7 @@ The staging API gateway (`staging-api.dirtydata.studio`) additionally routes `/s
 
 | Database | Owner | Size | Service | Purpose |
 |----------|-------|------|---------|---------|
-| `agent_memory` | postgres | ~221 MB | Jira Graph, MCP | GitHub mirror schemas (`jira.*`), pgvector embeddings. Open-WebUI's `public.document_chunk` was dropped with its decommission (LAB-1399); `public.knowledge_embeddings` belongs to `ingest-gdrive-to-pgvector.py` and stays |
+| `agent_memory` | postgres | ~221 MB | Jira Graph, MCP | GitHub mirror schemas (`jira.*`), pgvector embeddings. Open-WebUI's `public.document_chunk` was dropped with its decommission (LAB-1399); `public.knowledge_embeddings` belongs to `ingest-gdrive-to-pgvector.py` and stays; `public.memories` belongs to `sync-memory-vault.py` (`com.homelab.vault-sync`, every 15 min) and stays; `public.action_logs` was dropped 2026-08-25 with the Memory Consolidation retirement (LAB-1514) |
 | `twenty_db` | twenty_user | ~16 MB | Twenty CRM | CRM application data |
 | `n8n` | postgres | ~19 MB | n8n | Workflow automation backend |
 | `freshrss_db` | freshrss | ~9 MB | FreshRSS | RSS feed data |
