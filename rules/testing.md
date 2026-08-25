@@ -34,8 +34,14 @@ any component containing test files. Adding a component with tests needs no conf
   collected locally, which usually means its dependencies are not installed on this
   machine. CI runs the same suite with a clean install.
 
-Current state: **8 suites, 264 tests passing**; `internal/agent-runtime` is allowlisted
-pending #1394.
+**There is deliberately no suite or test count in this file.** Run
+`bash internal/scripts/discover-test-suites.sh` for the current suite list; the CI run
+reports the test totals. Any number written here is stale the day a component grows a test
+directory — which is the whole point of the sentence directly above it. This line used to
+read *"8 suites, 264 tests passing"*, a figure measured at #1369's close that had drifted
+badly by the time anyone reread it, contradicting its own paragraph (#1537).
+
+`internal/agent-runtime` is allowlisted pending #1394.
 
 ## Behavioral Instructions (always active)
 

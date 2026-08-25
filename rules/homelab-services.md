@@ -193,6 +193,15 @@ Staging containers are named `<service>-staging` (e.g. `n8n-staging`, `ollama-st
 
 ### Safety
 
-- `docker stop/rm/rmi/kill` on production containers is intercepted by the `.claude/hooks/docker-safety-check.sh` safety hook
+- `.claude/hooks/docker-safety-check.sh` intercepts the destructive verbs — `stop`, `rm`,
+  `rmi`, `kill` — on named production targets, in **either** spelling: `docker rm n8n` and
+  the management-command form `docker container|image|volume|network rm n8n`. Global flags
+  no longer hide the verb, so `docker --context prod rm n8n` is gated too (LAB-1530; every
+  one of those but the first used to be allowed, `docker volume rm` included).
+- **Not gated, by design:** `prune` (`docker image|volume|system|network prune`) and
+  `docker compose down -v`. They destroy an unnamed *set*, so the gate's "no named target
+  → allow" rule passes them; refusing them needs a second verdict path, which is tracked
+  rather than half-built. Treat them as unguarded.
 - Never use `docker rm` on production containers without explicit confirmation
-- Staging containers (`*-staging`) can be manipulated freely
+- Staging containers are exempt — matched by **suffix or tag** (`n8n-staging`,
+  `foo:staging`), not by substring, so `my-staging-thing-prod` is still refused
