@@ -123,6 +123,52 @@ while IFS= read -r dir; do
       echo "[pre-commit-tests] $dir: discovery says bash, but no tests/*.test.sh found." >&2
       status=1
     fi
+  elif [ "$kind" = rust ]; then
+    # LAB-1437 — the LAB-1455 defect, one kind over. Discovery grew a `rust` kind
+    # (Cargo's two test layouts: tests/*.rs targets and #[cfg(test)] in src), and CI
+    # grew an arm to run it. This dispatch did not, so a rust suite fell through to
+    # the pytest path, where `--collect-only` exits 5 because pytest does not collect
+    # .rs files. That was read as "could not be COLLECTED (usually missing deps)" and
+    # skipped — the gate printing a reason that was not the reason, about a suite it
+    # was supposed to be enforcing.
+    #
+    # ABSENT TOOLCHAIN vs FAILING TESTS. These must not be decided by the same signal.
+    # `cargo test` exits non-zero for a compile error and for a failed assertion alike,
+    # and a shell running a command that is not installed also exits non-zero (127) —
+    # so reading "cargo is missing" out of an exit code would make an un-toolchained
+    # machine look like a repo full of broken tests, and the fix for that (tolerating
+    # the exit code) would make broken tests look like a missing toolchain. The
+    # toolchain question is therefore settled BEFORE cargo is invoked, and never again
+    # afterwards: `command -v` below, exit code after. Same split as the pytest arm's
+    # --collect-only probe and the node arm's node_modules check.
+    if ! command -v cargo >/dev/null 2>&1; then
+      echo "[pre-commit-tests] cargo not available for $dir — SKIPPED (not a pass)." >&2
+      echo "                   CI runs this suite with a Rust toolchain installed." >&2
+      continue
+    fi
+    if [ ! -f "$dir/Cargo.toml" ]; then
+      # Discovery resolves a rust owner ONLY by walking up to a Cargo.toml, so its
+      # absence here means discovery and this runner disagree about where the crate is.
+      # Loud, not skipped — the same stance the bash branch takes above, and the same
+      # one tests.yml takes.
+      echo "[pre-commit-tests] $dir: discovery says rust, but no Cargo.toml found." >&2
+      status=1
+      continue
+    fi
+    if [ -n "$ignore" ]; then
+      # `ignore` is pytest's --ignore and has no cargo equivalent — Cargo holds back a
+      # test needing live services with #[ignore] or a feature gate, in the test itself.
+      # Said out loud rather than dropped on the floor, as tests.yml does.
+      echo "[pre-commit-tests] $dir declares ignore='$ignore', which rust suites do not honour." >&2
+    fi
+    # Plain `cargo test`: lib unit tests, every tests/*.rs binary, and doc tests.
+    # --all-targets would look more thorough and would silently drop the doc tests.
+    # Output only on failure, like the bash branch.
+    if ! out="$( cd "$dir" && cargo test 2>&1 )"; then
+      echo "[pre-commit-tests] FAILED: cargo test in $dir" >&2
+      printf '%s\n' "$out" | tail -20 >&2
+      status=1
+    fi
   elif [ "$kind" = node ]; then
     if [ ! -d "$dir/node_modules" ]; then
       echo "[pre-commit-tests] $dir has no node_modules — SKIPPED (not a pass). Run npm install." >&2
