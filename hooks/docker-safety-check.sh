@@ -47,11 +47,47 @@
 #     looks like a destructive docker invocation we refuse and say why; otherwise we get
 #     out of the way. The gate fails closed only for commands that look dangerous.
 #
+#   * ONE GRAMMAR, THREE PLACES. The tokenizer path, the shell fallback and the python
+#     fallback must recognise the same invocations. The two fallbacks used to be two
+#     hand-copied regexes; they shared every hole (#1530). They now share ONE string,
+#     $RAW_DESTRUCTIVE_RE below, handed to the parser as HOOK_RAW_DESTRUCTIVE_RE. It is
+#     spelled with `\s` and `[^ ]` on purpose: those mean the same thing to grep -E (BSD
+#     and GNU) and to python re. `[[:space:]]` is not python, `[^\s]` is not ERE.
+#
+# LAB-1530 — the gate was fail-OPEN on most spellings of the same command
+# --------------------------------------------------------------------
+# Measured by feeding synthetic PreToolUse payloads to this hook: `docker rm n8n` was
+# refused, but `docker container rm n8n`, `docker volume rm nextcloud_data`,
+# `docker image rm x`, `docker network rm core` and `docker --context X rm n8n` were all
+# ALLOWED. `targets_of()` required the verb to be the word IMMEDIATELY after `docker` and
+# returned None otherwise — and None means "not a gated invocation", so every one of
+# those became an allow. `docker volume rm` is the most destructive of the set on this
+# fleet: it takes data no container rebuild brings back.
+#
+# The grammar is now: `docker` [global flags, with their operands] (<verb> | <noun>
+# <verb>), noun in {container, image, volume, network}, verb in {stop, rm, rmi, kill}.
+# The verb after a noun is REQUIRED, so `docker container ls` and `docker volume ls` stay
+# allowed — a widened gate that blocks reads is a gate people route around.
+#
+# OUT OF SCOPE, deliberately (#1530), not overlooked:
+#   * `prune` — `docker image|volume|system|network prune` destroys an unnamed SET. It
+#     names no target, so `offenders` has nothing to report and the load-bearing
+#     NO TARGETS -> ALLOW rule above passes it. Gating it needs a SECOND verdict path for
+#     "destroys everything matching a filter", which is a different design, not a wider
+#     regex. Recorded rather than half-built. Same for `docker compose down -v`, which
+#     destroys a whole stack's volumes and likewise names no container.
+#   * The intercepted verb set is still stop, rm, rmi, kill.
+#
 # PRESERVED EXACTLY (do not "fix" these without an issue):
-#   * The exempt test is substring `*-staging*`, not a suffix, matching the old behaviour.
-#   * The subcommand must follow `docker` IMMEDIATELY, so `docker --context p rm n8n` is
-#     not gated — same blind spot as before. Widening that is out of scope for #1358.
-#   * The intercepted subcommand set is unchanged: stop, rm, rmi, kill.
+#   * The verdict vocabulary: exit 0 allow, exit 2 block, never anything else.
+#   * NO TARGETS -> ALLOW, and the block path requiring a named target.
+#
+# CHANGED by #1530 (was "PRESERVED EXACTLY" under #1358 — both entries were wrong):
+#   * The exempt test was substring `*-staging*`. That was wrong in BOTH directions:
+#     `docker rmi foo:staging` was blocked (no literal `-staging`) and
+#     `docker rm my-staging-thing-prod` was allowed (it contains one). It is now a
+#     tag/suffix test — see is_staging().
+#   * The subcommand no longer has to follow `docker` immediately.
 #
 # Tests: .claude/hooks/tests/docker-safety-check.test.sh
 
@@ -65,13 +101,19 @@ GATE_NAME="docker-safety-check"
 
 INPUT=$(cat)
 
-# Fail-closed raw-text fallback, used when the payload cannot be parsed properly.
-# Deliberately crude: it only decides whether the text LOOKS like a destructive docker
-# invocation, and it never allows one through on the strength of a guess.
+# THE shared grammar for both fail-closed fallbacks — the shell one just below and the
+# python one inside the parser, which receives this exact string in the environment.
+# Mirrors targets_of(): docker, then any global flags (optionally with an operand), then
+# either <verb> or <noun> <verb>. Deliberately crude — it only decides whether the text
+# LOOKS like a destructive docker invocation, and it never allows one through on a guess.
+# Portability: `\s` outside brackets and `[^ ]` / `[^- ]` inside them are the only
+# whitespace spellings that mean the same thing to grep -E and to python re.
+RAW_DESTRUCTIVE_RE='(^|[^A-Za-z0-9_-])docker(\s+-[^ ]+(\s+[^- ][^ ]*)?)*(\s+(container|image|volume|network))?\s+(stop|rm|rmi|kill)(\s|$)'
+
 # A herestring, NOT `printf ... | grep -q`: under `pipefail` a grep that exits early on a
 # match can SIGPIPE the producer, and the pipeline then reports failure ON A MATCH.
 raw_looks_destructive() {
-  grep -qE '(^|[^[:alnum:]_-])docker[[:space:]]+(stop|rm|rmi|kill)([[:space:]]|$)' <<<"$1"
+  grep -qE "$RAW_DESTRUCTIVE_RE" <<<"$1"
 }
 
 block_header() {
@@ -105,10 +147,23 @@ fi
 
 PARSER=$(cat <<'PYEOF'
 import json
+import os
 import re
 import sys
 
 DESTRUCTIVE = ("stop", "rm", "rmi", "kill")
+
+# `docker <noun> <verb>` is the same command as `docker <verb>`. The verb is still
+# required after the noun, so `docker container ls` is not gated (#1530).
+OBJECT_NOUNS = ("container", "image", "volume", "network")
+
+# docker's GLOBAL flags that take a SEPARATE operand. Any other `-...` word is treated as
+# a boolean flag and simply skipped; that is the safe direction, because the only way to
+# be wrong is to read a flag's value as a verb, which over-blocks rather than under-.
+GLOBAL_VALUE_FLAGS = frozenset((
+    "-c", "--context", "-H", "--host", "-l", "--log-level", "--config",
+    "--tlscacert", "--tlscert", "--tlskey",
+))
 
 # Control operators end one command and start the next; redirect operators do not.
 # Parentheses and backticks open a nested command, which is treated as a new segment,
@@ -126,9 +181,11 @@ OP_CHARS = CONTROL_CHARS | REDIR_CHARS
 # Leading words that precede the actual command word and are not it.
 LEADING_NOISE = {"{", "!", "then", "else", "elif", "do", "time"}
 ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
-RAW_DESTRUCTIVE = re.compile(
-    r"(^|[^A-Za-z0-9_-])docker\s+(stop|rm|rmi|kill)(\s|$)"
-)
+
+# The SAME string the shell fallback greps with, handed over in the environment so the two
+# can never drift apart again (#1530). A KeyError here is deliberate: it exits non-zero,
+# which the caller treats as a parser failure and answers with its own copy of the scan.
+RAW_DESTRUCTIVE = re.compile(os.environ["HOOK_RAW_DESTRUCTIVE_RE"])
 
 
 def tokenize(cmd):
@@ -224,8 +281,31 @@ def targets_of(seg):
     if word != "docker" and not word.endswith("/docker"):
         return None
     i += 1
-    # The subcommand must follow immediately — preserved from the original gate.
-    if i >= len(seg) or seg[i][0] != "word" or seg[i][1] not in DESTRUCTIVE:
+
+    # Step over docker's GLOBAL flags and their operands. `docker --context prod rm n8n`
+    # is `docker rm n8n` against another daemon; requiring the verb to be adjacent made
+    # it an ALLOW (#1530).
+    while i < len(seg) and seg[i][0] == "word" and seg[i][1].startswith("-"):
+        flag = seg[i][1]
+        i += 1
+        if (
+            flag in GLOBAL_VALUE_FLAGS
+            and i < len(seg)
+            and seg[i][0] == "word"
+            and not seg[i][1].startswith("-")
+        ):
+            i += 1                       # `--context X`, not `--context=X`
+
+    if i >= len(seg) or seg[i][0] != "word":
+        return None
+    head = seg[i][1]
+    if head in OBJECT_NOUNS:
+        # Management-command spelling: `docker volume rm x`. The VERB is what makes it
+        # destructive, so it is required — `docker volume ls` must stay allowed.
+        i += 1
+        if i >= len(seg) or seg[i][0] != "word" or seg[i][1] not in DESTRUCTIVE:
+            return None
+    elif head not in DESTRUCTIVE:
         return None
     i += 1
 
@@ -246,6 +326,21 @@ def targets_of(seg):
         found.append(text)
         i += 1
     return found
+
+
+def is_staging(target):
+    """True if this target names a staging artefact, by SUFFIX or TAG (#1530).
+
+    The old test was `"-staging" in target`, wrong in both directions: it blocked
+    `foo:staging` (no literal `-staging`) and exempted `my-staging-thing-prod`.
+    """
+    name = target.split("@", 1)[0]          # drop any `@sha256:...` digest
+    head, sep, tail = name.rpartition(":")
+    if sep and head and "/" not in tail:    # a tag, not a `registry:5000/img` port
+        if tail == "staging" or tail.endswith("-staging"):
+            return True
+        name = head
+    return name == "staging" or name.endswith("-staging")
 
 
 def main():
@@ -285,7 +380,7 @@ def main():
         if found is None:
             continue
         gated = True
-        offenders.extend(t for t in found if "-staging" not in t)
+        offenders.extend(t for t in found if not is_staging(t))
 
     if not gated or not offenders:
         # Not a gated command, or a gated one naming only staging containers, or naming
@@ -302,7 +397,7 @@ main()
 PYEOF
 )
 
-VERDICT_RAW=$(python3 -c "$PARSER" 2>/dev/null <<<"$INPUT")
+VERDICT_RAW=$(HOOK_RAW_DESTRUCTIVE_RE="$RAW_DESTRUCTIVE_RE" python3 -c "$PARSER" 2>/dev/null <<<"$INPUT")
 PARSER_RC=$?
 
 if [[ $PARSER_RC -ne 0 || -z "$VERDICT_RAW" ]]; then
