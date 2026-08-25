@@ -49,17 +49,24 @@ while IFS= read -r file; do
     continue
   fi
 
-  # Check required fields
+  # Check required fields.
+  # Herestrings throughout, NOT `echo "$FM" | grep -q` (LAB-1603): under the `pipefail`
+  # at the top of this file, `grep -q` exits at its first match and closes the pipe, the
+  # producer takes SIGPIPE, and `pipefail` promotes that to the pipeline's status — so
+  # the test reports FAILURE precisely when the field IS present. Here that inverts a
+  # `!`, meaning a valid file would be reported as missing a required field.
   for field in title tags created; do
-    if ! echo "$FM" | grep -q "^${field}:"; then
+    if ! grep -q "^${field}:" <<<"$FM"; then
       echo "ERROR: $file — missing required field: $field"
       ERRORS=$((ERRORS + 1))
     fi
   done
 
   # Validate created date format
-  CREATED=$(echo "$FM" | grep "^created:" | sed 's/created: *//' | sed 's/^["'"'"']//;s/["'"'"']$//')
-  if [[ -n "$CREATED" ]] && ! echo "$CREATED" | grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'; then
+  # `grep` without -q here, so it reads to EOF and cannot SIGPIPE its producer; the
+  # -q test below is the herestring form for the same reason as the loop above.
+  CREATED=$(grep "^created:" <<<"$FM" | sed 's/created: *//' | sed 's/^["'"'"']//;s/["'"'"']$//')
+  if [[ -n "$CREATED" ]] && ! grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' <<<"$CREATED"; then
     echo "ERROR: $file — created date not in YYYY-MM-DD format: $CREATED"
     ERRORS=$((ERRORS + 1))
   fi

@@ -33,8 +33,14 @@ for f in "$MEMORY_DIR"/*.md; do
     basename_f=$(basename "$f")
     [ "$basename_f" = "MEMORY.md" ] && continue
 
-    # Check if file has frontmatter
-    if ! head -1 "$f" | grep -q '^---$'; then
+    # Check if file has frontmatter.
+    # Capture-then-test, NOT `head -1 "$f" | grep -q` (LAB-1603): under the `pipefail`
+    # at the top of this file, `grep -q` closing the pipe on a match can SIGPIPE the
+    # producer and invert the verdict. `head -1` is bounded to one line so this one was
+    # not reachable in practice, but the construct is the defect — a bounded producer
+    # today is an unbounded one after one edit.
+    first_line=$(head -1 "$f")
+    if ! grep -q '^---$' <<<"$first_line"; then
         continue
     fi
 

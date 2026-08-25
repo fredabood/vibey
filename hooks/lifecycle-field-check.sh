@@ -128,7 +128,15 @@ fi
 # Allow path 2: verification report comment already posted (read-only check)
 if [[ -n "$REPO" && -n "$ISSUE_NUM" ]]; then
     COMMENTS=$(gh api "repos/$OWNER/$REPO/issues/$ISSUE_NUM/comments" --paginate --jq '.[].body' 2>/dev/null || echo "")
-    if printf '%s' "$COMMENTS" | grep -q '## Verification Report'; then
+    # A herestring, NOT `printf '%s' "$COMMENTS" | grep -q` (LAB-1603). `set -euo pipefail`
+    # is in effect at the top of this file. Piped, `grep -q` exits at its FIRST match and
+    # closes the pipe; `printf` takes SIGPIPE with the rest of the payload unwritten;
+    # `pipefail` promotes that to the pipeline's status — so the test reported FALSE exactly
+    # when the marker WAS present, and this gate refused a close whose Verification Report
+    # existed. `$COMMENTS` is every comment on the issue, concatenated and `--paginate`d, so
+    # it grows without bound: the failure was latent below the 64 KiB pipe buffer and
+    # deterministic above it. Measured before the fix — allow at 40 KB, BLOCK at 200 KB.
+    if grep -q '## Verification Report' <<<"$COMMENTS"; then
         echo "LIFECYCLE GATE: $ISSUE_REF -> closed/completed (verification report found)"
         exit 0
     fi
