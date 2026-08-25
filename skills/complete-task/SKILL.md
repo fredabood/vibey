@@ -118,7 +118,7 @@ Post using `mcp__github__add_issue_comment`. There are no custom fields on GitHu
 ### Step 7: Advance status
 
 **Preferred target:** board Status → "Implementation Complete" — use `mcp__github__projects_write` with the IDs from `.claude/rules/custom-fields.md`:
-- Project `PVT_kwHOAM5y1M4BcqrU`, Status field `PVTSSF_lAHOAM5y1M4BcqrUzhXRxK4`, option "Implementation Complete" = `2eec8df1`
+- Project `PVT_kwHOAM5y1M4BcqrU`, Status field `PVTSSF_lAHOAM5y1M4BcqrUzhXRxK4`, option **"Implementation Complete"** — resolve its id by name at call time; option ids are NOT stable (`.claude/rules/custom-fields.md`)
 
 This leaves the issue open for `/review-ticket` (docs + memory + testing verification) before terminal close.
 

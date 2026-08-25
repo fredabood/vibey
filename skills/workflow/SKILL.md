@@ -108,7 +108,7 @@ Output a status line after each phase: `> Phase N: <name> ✓`
 ### Phase 1: Work Item
 
 1. Fetch the work item with `mcp__github__issue_read` (method `get`) — confirm it is open
-2. If board Status is not already "In Progress", set it via `mcp__github__projects_write` (project `PVT_kwHOAM5y1M4BcqrU`, Status field `PVTSSF_lAHOAM5y1M4BcqrUzhXRxK4`, option `62ad3706` — see `.claude/rules/custom-fields.md`)
+2. If board Status is not already "In Progress", set it via `mcp__github__projects_write` (project `PVT_kwHOAM5y1M4BcqrU`, Status field `PVTSSF_lAHOAM5y1M4BcqrUzhXRxK4`, option **"In Progress"** resolved by name at call time — option ids are NOT stable, see `.claude/rules/custom-fields.md`)
 3. Post the assignment comment (there are no custom fields on GitHub — this replaces Primary/Assigned Agent) using `mcp__github__add_issue_comment`:
    ```
    Assigned Agent: <session-identifier>
@@ -282,7 +282,7 @@ and its `HEAD` is shared by every concurrent session. **Nothing in this phase ma
 ### Follow-Up Items
 ```
 
-3. Move board Status → **Implementation Complete** via `mcp__github__projects_write` (option `2eec8df1`)
+3. Move board Status → **Implementation Complete** via `mcp__github__projects_write` (resolve that option BY NAME — ids are reissued on any field edit, `.claude/rules/custom-fields.md`)
 4. Check if the work item has a parent epic — `mcp__github__issue_read` (method `get`, look for parent) or check the parent's sub-issues (method `get_sub_issues`). If all sibling sub-issues are closed or in Implementation Complete, note it.
 5. **Write state:** DB + file (`phase_7_at`)
 
@@ -318,7 +318,7 @@ and its `HEAD` is shared by every concurrent session. **Nothing in this phase ma
 
 ### Phase 9: Review Complete
 
-1. Move board Status → **Review Complete** via `mcp__github__projects_write` (option `0aa21637`)
+1. Move board Status → **Review Complete** via `mcp__github__projects_write` (resolve that option BY NAME — ids are reissued on any field edit, `.claude/rules/custom-fields.md`)
 2. **Write state:** DB + file (`phase_9_at`)
 
 **Gate:** Board Status = Review Complete.

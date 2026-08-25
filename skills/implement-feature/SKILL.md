@@ -41,7 +41,7 @@ Execute each step sequentially. Do not proceed to the next step until the curren
 - **Ensure an issue exists:**
   - If input is an issue key, resolve repo/number (above) and fetch it with `mcp__github__issue_read` (method `get`)
   - If input is a description, search for an existing issue with `mcp__github__search_issues` (scope `repo:fredabood/homelab` or `repo:fredabood/dirtydata`). If none found, create one using `/create-ticket` logic.
-- **Set board Status to In Progress** if not already — use `mcp__github__projects_write` with the stable IDs from `.claude/rules/custom-fields.md` (project `PVT_kwHOAM5y1M4BcqrU`, Status field `PVTSSF_lAHOAM5y1M4BcqrUzhXRxK4`, In Progress option `62ad3706`). Never guess IDs — if a mutation rejects them, re-derive via `gh api graphql`.
+- **Set board Status to In Progress** if not already — use `mcp__github__projects_write` with the project and field ids from `.claude/rules/custom-fields.md` (project `PVT_kwHOAM5y1M4BcqrU`, Status field `PVTSSF_lAHOAM5y1M4BcqrUzhXRxK4`), and resolve the **"In Progress"** option BY NAME at call time. Option ids are NOT stable — a single `updateProjectV2Field` reissues all of them, so never hardcode or reuse one.
 - **Post the assignment comment** (replaces the old Primary/Assigned Agent custom fields) using `mcp__github__add_issue_comment`:
   ```
   Assigned Agent: <session-identifier>

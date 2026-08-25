@@ -65,9 +65,11 @@ Backlog ──→ In Progress ──→ Implementation Complete ──→ Review
 ```
 
 **Mechanics:** Board Status changes via `mcp__github__projects_write`; close/reopen via
-`mcp__github__issue_write` (always set `state_reason`). Closed issues come off the board (D5 prune);
-reopened issues are re-added at `Backlog` by the webhook receiver. Stable board/field/option IDs:
-`.claude/rules/custom-fields.md`.
+`mcp__github__issue_write` (always set `state_reason`). Closed issues **stay on the board** at
+`Status = Done` (corrected 2026-08-25, LAB-1352 — the D5 prune was never implemented and is no
+longer the intended semantics); reopening moves the item back to `Backlog`. Both are done by the
+webhook receiver in ~2 s. Board and field ids — and why the **option** ids must be resolved by
+name rather than hardcoded — are in `.claude/rules/custom-fields.md`.
 
 ---
 
