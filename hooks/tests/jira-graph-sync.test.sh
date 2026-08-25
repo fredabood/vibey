@@ -67,7 +67,19 @@ expect_rc() { # $1 expected, $2 actual, $3 label
 }
 
 ITEM="PVTI_lAHOAM5y1M4BcqrUzg2t6LM"
-INPROG="62ad3706"
+
+# Board Status option ids are NOT stable — one `updateProjectV2Field` call reissues every one
+# of them (measured 2026-08-25, LAB-1352). So no test here pins a real id: the suite seeds its
+# own deliberately-fake table and asserts the hook resolves an id to the option NAME. A test
+# that pins a live id is part of why the reassignment went unnoticed for as long as it did.
+# A seeded table is also authoritative in the hook, so no case below can reach the network.
+INPROG="deadbe01"
+export HOMELAB_BOARD_STATUS_OPTIONS="deadbe01 In Progress
+deadbe02 Backlog
+deadbe03 Implementation Complete
+deadbe04 Review Complete
+deadbe05 Deferred
+deadbe06 Done"
 
 echo "== a gh board mutation FIRES the sync =="
 
@@ -84,10 +96,13 @@ d = json.load(open(sys.argv[1]))
 assert "projects_write" in d.get("tool_name", ""), d.get("tool_name")
 vals = list(d.get("tool_input", {}).values())
 assert any(isinstance(v, str) and v.startswith("PVTI_") for v in vals), vals
-assert "62ad3706" in vals, vals
+# The status must be the resolved option NAME, never the id. An id forwarded downstream is a
+# silent no-op the moment Projects v2 reissues it — which it does on any field edit.
+assert "In Progress" in vals, vals
+assert "deadbe01" not in vals, vals
 PY
-then ok "delivered payload carries tool_name=projects_write, the PVTI_ item id and the option id"
-else no "delivered payload carries tool_name=projects_write, the PVTI_ item id and the option id" "$(cat "$SEEN" 2>/dev/null)"
+then ok "delivered payload carries tool_name=projects_write, the PVTI_ item id and the resolved option NAME"
+else no "delivered payload carries tool_name=projects_write, the PVTI_ item id and the resolved option NAME" "$(cat "$SEEN" 2>/dev/null)"
 fi
 
 run "$(bash_payload "gh project item-edit --id $ITEM --field-id PVTSSF_x --single-select-option-id $INPROG --project-id PVT_kwHOAM5y1M4BcqrU")" >/dev/null
@@ -108,6 +123,39 @@ mutation {
 GQL
 run "$(bash_payload "gh api graphql -F query=@$QF")" >/dev/null
 expect_delivered "gh api graphql -F query=@file delivers (ids resolved from the file)"
+
+echo "== option ids are resolved BY NAME, never trusted as literals (LAB-1352) =="
+
+# The point of LAB-1352. `92510fdd` is a real, live board option id — and it is exactly what
+# an id the local table has never seen looks like after a reassignment. It must NOT be
+# forwarded: downstream maps ids through its own table, so an unknown id becomes a silent
+# no-op write. Silence here is the correct behaviour, not a miss.
+run "$(bash_payload "gh api graphql -f query='mutation{updateProjectV2ItemFieldValue(input:{itemId:\"$ITEM\",value:{singleSelectOptionId:\"92510fdd\"}}){projectV2Item{id}}}'")" >/dev/null
+expect_silent "an option id absent from the table is NOT forwarded downstream"
+
+# ...and the NAME path needs no table, no cache and no network at all. Same board mutation,
+# with the status named in the query file the way an agent actually writes one.
+QF2="$SANDBOX/board-named.graphql"
+cat > "$QF2" <<GQL
+# board: move to In Progress
+mutation {
+  updateProjectV2ItemFieldValue(input:{
+    projectId:"PVT_kwHOAM5y1M4BcqrU", itemId:"$ITEM",
+    fieldId:"PVTSSF_lAHOAM5y1M4BcqrUzhXRxK4",
+    value:{singleSelectOptionId:"1a2b3c4d"}}) { projectV2Item { id } } }
+GQL
+SAVED_OPTS="$HOMELAB_BOARD_STATUS_OPTIONS"
+export HOMELAB_BOARD_STATUS_OPTIONS=""
+export HOMELAB_BOARD_OPTION_LOOKUP="off"
+run "$(bash_payload "gh api graphql -F query=@$QF2")" >/dev/null
+expect_delivered "a status spelled by NAME delivers with an empty table and the lookup disabled"
+if [ -s "$SEEN" ] && grep -q "In Progress" "$SEEN"; then
+  ok "the NAME wins over an unknown option id in the same haystack"
+else
+  no "the NAME wins over an unknown option id in the same haystack" "$(cat "$SEEN" 2>/dev/null)"
+fi
+export HOMELAB_BOARD_STATUS_OPTIONS="$SAVED_OPTS"
+unset HOMELAB_BOARD_OPTION_LOOKUP
 
 echo "== control cases: the sync must NOT fire =="
 

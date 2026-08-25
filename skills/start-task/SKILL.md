@@ -101,7 +101,7 @@ Use `mcp__github__projects_write` to update the issue's item on the "Homelab Wor
 
 - Project: `PVT_kwHOAM5y1M4BcqrU` (user `fredabood`, number 1)
 - `Status` field: `PVTSSF_lAHOAM5y1M4BcqrUzhXRxK4`
-- Option "In Progress": `62ad3706`
+- Option **"In Progress"** — resolve its id by name at call time; option ids are NOT stable (`.claude/rules/custom-fields.md`)
 
 These IDs are stable for the life of the board (`.claude/rules/custom-fields.md`). If the mutation rejects them, fail loudly and re-derive via `gh api graphql` querying `user(login:"fredabood"){projectV2(number:1){...}}` — never silently skip the transition. If the issue is somehow not on the board, note it (the n8n webhook should have added it) and add it via `projects_write`.
 

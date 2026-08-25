@@ -79,7 +79,7 @@ Use `mcp__github__add_issue_comment` to post the verification report on the issu
 ### Step 7: Gate result
 
 - **All pass:** Set board Status → "Review Complete" via `mcp__github__projects_write`:
-  - Project `PVT_kwHOAM5y1M4BcqrU`, Status field `PVTSSF_lAHOAM5y1M4BcqrUzhXRxK4`, option "Review Complete" = `0aa21637`
+  - Project `PVT_kwHOAM5y1M4BcqrU`, Status field `PVTSSF_lAHOAM5y1M4BcqrUzhXRxK4`, option **"Review Complete"** — resolve its id by name at call time; option ids are NOT stable (`.claude/rules/custom-fields.md`)
 
   Confirm the issue is ready for terminal close (`/complete-task` → close with `state_reason: completed`).
 - **Any fail:** List what needs fixing. Do not advance the board Status and do not proceed to completion. Suggest specific actions to address each failure.

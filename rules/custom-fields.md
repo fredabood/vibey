@@ -11,26 +11,79 @@ All skills, hooks, and agents reference this file for lifecycle operations.
 
 ---
 
-## Projects v2 Board — Stable IDs
+## Projects v2 Board — IDs
 
-| Object | ID |
-|--------|-----|
-| Project "Homelab Work" (user `fredabood`, number 1) | `PVT_kwHOAM5y1M4BcqrU` |
-| `Status` single-select field | `PVTSSF_lAHOAM5y1M4BcqrUzhXRxK4` |
+Two of these are stable. The Status **option** ids are not — read the next section
+before copying one anywhere.
 
-**Status options:**
+| Object | ID | Stable? |
+|--------|-----|---------|
+| Project "Homelab Work" (user `fredabood`, number 1) | `PVT_kwHOAM5y1M4BcqrU` | Yes — for the life of the board |
+| `Status` single-select field | `PVTSSF_lAHOAM5y1M4BcqrUzhXRxK4` | Yes — survives edits to its options |
 
-| Option | ID |
-|--------|-----|
-| Backlog | `093793f1` |
-| In Progress | `62ad3706` |
-| Implementation Complete | `2eec8df1` |
-| Review Complete | `0aa21637` |
-| Deferred | `087e34a4` |
+## Status options — the ids are NOT stable
 
-These IDs are stable for the life of the board. Scripts may hardcode them but must
-fail loudly if a GraphQL mutation rejects them (board recreated → re-derive with
-`gh api graphql` querying `user(login:"fredabood"){projectV2(number:1){...}}`).
+> [!WARNING]
+> **Corrected 2026-08-25 (LAB-1352).** This section used to list five option ids and say:
+> *"These IDs are stable for the life of the board. Scripts may hardcode them but must fail
+> loudly if a GraphQL mutation rejects them."* **That is false, and it is the guidance that
+> caused the incident recorded below.**
+
+**Never hardcode a Status option id. Resolve the option by name, at runtime, every time.**
+
+Adding an option to a single-select field is only possible through `updateProjectV2Field`,
+which takes the **entire option list** and **replaces** it. GitHub then reissues an id for
+every option in that list — including the ones sent back unchanged. There is no
+add-one-option mutation, so this is not an edge case: it is what happens the next time
+anyone adds, renames, reorders or removes a status.
+
+Measured 2026-08-25, adding a `Done` option: all five existing ids were reassigned in that
+one call, and all 471 board items were wiped and had to be restored from a snapshot.
+
+| Option | id before | id after |
+|---|---|---|
+| Backlog | `093793f1` | `de178a5f` |
+| In Progress | `62ad3706` | `870de489` |
+| Implementation Complete | `2eec8df1` | `065ca24c` |
+| Review Complete | `0aa21637` | `2257cd83` |
+| Deferred | `087e34a4` | `cec9736b` |
+| Done | *(did not exist)* | `92510fdd` |
+
+> That table is a **dated debugging snapshot (2026-08-25)**, not a lookup table. It is here
+> so a future reader can recognise a dead id, not so anything can depend on a live one. The
+> project id and field id above were untouched by the same call.
+
+**The correct pattern was already in this repo while this file said the opposite.** The
+`ReconcileBoard` node of `internal/n8n/workflows/github-full-sync.json` carries this comment
+verbatim:
+
+> Option ids are resolved BY NAME every run. `Done` is created live and Projects v2
+> reissues every option id on a board rebuild, so a hardcoded id would rot into a
+> silent no-op write. Field/option absence aborts the reconcile with a loud log.
+
+That node came through the reassignment untouched. Every consumer that had hardcoded an id
+did not. So the lesson is not "the ids changed today" — it is that this rule sanctioned a
+practice the implementation had already rejected, in writing, on the same board.
+
+### Resolving an option
+
+```bash
+gh api graphql -f query='query{user(login:"fredabood"){projectV2(number:1){
+  field(name:"Status"){... on ProjectV2SingleSelectField{id options{id name}}}}}}'
+```
+
+Match on `name`. Requirements for every consumer:
+
+- Resolve by name on each run. Do not cache an id across runs, and never commit one.
+- **Fail loudly when the name is absent.** A missing option means the board changed shape;
+  a silent skip turns that into a mirror that is quietly wrong. `ReconcileBoard` aborts the
+  reconcile; the `MoveToDone` node in `github-webhook-receiver.json` throws an actionable
+  error.
+- Pass the **name** between components where you can. `.claude/hooks/jira-graph-sync.sh`
+  hands `on-jira-transition` a resolved name for exactly this reason.
+
+The option **names** are the stable identifiers: `Backlog`, `In Progress`,
+`Implementation Complete`, `Review Complete`, `Deferred`, `Done`.
 
 ## Status Transitions
 
@@ -43,8 +96,18 @@ There are no Jira transition IDs anymore. To move an issue:
 | Any → Won't Do | `mcp__github__issue_write` — `state: closed`, `state_reason: not_planned` |
 | Reopen | `mcp__github__issue_write` — `state: open`, then set board Status |
 
-Closing an issue removes it from the board (D5). Reopening re-adds it via the
-webhook receiver with `Status=Backlog`.
+> [!WARNING]
+> **Corrected 2026-08-25 (LAB-1352).** This read *"Closing an issue removes it from the
+> board (D5). Reopening re-adds it via the webhook receiver with `Status=Backlog`."* It was
+> false twice over: nothing ever implemented the prune — it existed only in the one-shot
+> migration script, so 229 closed items had quietly accumulated — and removal is no longer
+> the intended semantics.
+
+**Closed issues stay on the board at `Status = Done`.** The `github-webhook-receiver` moves
+the item to `Done` on close and back to `Backlog` on reopen, both in ~2 s; the
+`github-full-sync` sweep repairs whatever the webhook missed. Keeping the item preserves
+board history and makes a mis-close undoable in the UI. Any query that reads board
+membership as a proxy for "open" must filter `Status != 'Done'`.
 
 ## Structured Comment Vocabulary
 

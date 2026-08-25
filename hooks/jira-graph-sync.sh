@@ -91,15 +91,128 @@ LIB="$HOOK_DIR/lib/gh-lifecycle.sh"
 VERDICT="$(gh_lifecycle_parse "$CMD" 2>/dev/null | cut -d'|' -f1)"
 [ "$VERDICT" = "board" ] || exit 0
 
+# ---------------------------------------------------------------------------------------
+# BOARD STATUS OPTION IDS ARE NOT STABLE. Do not reintroduce a hardcoded list here.
+#
+# Measured 2026-08-25 (LAB-1352): adding a `Done` option to the Status field needs
+# `updateProjectV2Field`, which is the only mechanism GitHub offers and which REPLACES the
+# entire option list — every existing option id was reissued in that one call. The list that
+# used to live on this line (093793f1 / 62ad3706 / 2eec8df1 / 0aa21637 / 087e34a4) died with
+# it, and this hook would have gone quietly blind to every board write made by id.
+#
+# So detection is by option NAME, which is stable because a human authored it; an option id
+# appearing in a GraphQL mutation is resolved to its name AT RUNTIME against the live field
+# (cached, bounded, and entirely optional — failure means no sync, never an error). The
+# payload handed downstream always carries the NAME, which on-jira-transition accepts
+# directly, so this hook does not depend on that script's own id map either.
+#
+# This is the rule the n8n `ReconcileBoard` node has followed all along:
+#   "Option ids are resolved BY NAME every run. `Done` is created live and Projects v2
+#    reissues every option id on a board rebuild, so a hardcoded id would rot into a
+#    silent no-op write."
+# See `.claude/rules/custom-fields.md` § "Status options — the ids are NOT stable".
+# ---------------------------------------------------------------------------------------
+
+BOARD_OWNER="${HOMELAB_BOARD_OWNER:-fredabood}"
+BOARD_NUMBER="${HOMELAB_BOARD_NUMBER:-1}"
+OPTION_CACHE="${TMPDIR:-/tmp}/claude-board-status-options-${BOARD_OWNER}-${BOARD_NUMBER}.txt"
+OPTION_CACHE_TTL_MIN=10
+
+# The option table is "<option-id> <option name>", one per line. Sources, in order:
+#   1. $HOMELAB_BOARD_STATUS_OPTIONS — pre-seeded; authoritative, and suppresses the network
+#      path entirely (this is what the test suite uses, so no test pins a literal id).
+#   2. a cache file younger than $OPTION_CACHE_TTL_MIN minutes.
+#   3. one live `gh` read, cached. Only ever reached for a board mutation carrying an id we
+#      cannot name — i.e. after a reassignment, which is exactly when it is worth paying for.
+seeded_options() { printf '%s' "${HOMELAB_BOARD_STATUS_OPTIONS:-}"; }
+
+cached_options() {
+  [ -f "$OPTION_CACHE" ] || return 0
+  [ -n "$(find "$OPTION_CACHE" -mmin "-$OPTION_CACHE_TTL_MIN" -print 2>/dev/null)" ] || return 0
+  cat "$OPTION_CACHE" 2>/dev/null
+  return 0
+}
+
+options_table() {
+  SEEDED="$(seeded_options)"
+  if [ -n "$SEEDED" ]; then printf '%s' "$SEEDED"; return 0; fi
+  cached_options
+}
+
+# Run "$@" with stdout to $1 under a hard ~5s ceiling. A hook that hangs is worse than a
+# stale mirror, and `timeout` is not on macOS.
+run_bounded() {
+  BOUND_OUT="$1"; shift
+  : >"$BOUND_OUT" 2>/dev/null || return 1
+  "$@" >"$BOUND_OUT" 2>/dev/null &
+  BOUND_PID=$!
+  ( sleep 5; kill -9 "$BOUND_PID" >/dev/null 2>&1 ) >/dev/null 2>&1 &
+  BOUND_WATCHDOG=$!
+  wait "$BOUND_PID" >/dev/null 2>&1
+  BOUND_RC=$?
+  kill "$BOUND_WATCHDOG" >/dev/null 2>&1
+  wait "$BOUND_WATCHDOG" >/dev/null 2>&1
+  return "$BOUND_RC"
+}
+
+PARSE_PY='
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    raise SystemExit(1)
+try:
+    opts = d["data"]["user"]["projectV2"]["field"]["options"] or []
+except Exception:
+    raise SystemExit(1)
+seen = 0
+for o in opts:
+    oid = (o.get("id") or "").strip()
+    name = (o.get("name") or "").strip()
+    if oid and name:
+        print(oid + " " + name)
+        seen += 1
+if not seen:
+    raise SystemExit(1)
+'
+
+refresh_options() {
+  case "${HOMELAB_BOARD_OPTION_LOOKUP:-on}" in
+    0|off|no|false|OFF|NO|FALSE) return 1 ;;
+  esac
+  [ -z "$(seeded_options)" ] || return 1
+  command -v gh >/dev/null 2>&1 || return 1
+  RAW="${OPTION_CACHE}.raw.$$"
+  run_bounded "$RAW" gh api graphql -f query="query{user(login:\"$BOARD_OWNER\"){projectV2(number:$BOARD_NUMBER){field(name:\"Status\"){... on ProjectV2SingleSelectField{options{id name}}}}}}" || {
+    rm -f "$RAW"
+    return 1
+  }
+  python3 -c "$PARSE_PY" <"$RAW" >"${OPTION_CACHE}.tmp.$$" 2>/dev/null
+  PARSE_RC=$?
+  rm -f "$RAW"
+  if [ "$PARSE_RC" -ne 0 ] || [ ! -s "${OPTION_CACHE}.tmp.$$" ]; then
+    rm -f "${OPTION_CACHE}.tmp.$$"
+    return 1
+  fi
+  mv -f "${OPTION_CACHE}.tmp.$$" "$OPTION_CACHE" 2>/dev/null || {
+    rm -f "${OPTION_CACHE}.tmp.$$"
+    return 1
+  }
+  return 0
+}
+
 # Synthesize the projects_write-shaped payload on-jira-transition expects. It walks nested
-# dict VALUES looking for a `PVTI_` item id and a Status option id or name, then resolves the
-# item id to repo+number over GraphQL — so supplying those two strings is sufficient, and it
-# keeps this hook from duplicating that script's status→category mapping.
+# dict VALUES looking for a `PVTI_` item id and a Status option name, then resolves the item
+# id to repo+number over GraphQL — so supplying those two strings is sufficient, and it keeps
+# this hook from duplicating that script's status→category mapping.
 #
 # The haystack is the command text plus any `query=@file` the command references, matching how
 # gh-lifecycle.sh resolves the documented board-status idiom (an inline mutation string trips
 # the worktree gate, so `-F query=@file.graphql` is what custom-fields.md prescribes).
-SYNTH="$(CMD="$CMD" python3 -c '
+#
+# Exit codes: 0 = payload on stdout; 2 = an option-id-shaped token we cannot name, so the
+# caller should refresh the table and retry; anything else = nothing to sync.
+SYNTH_PY='
 import json, os, re, shlex
 
 cmd = os.environ.get("CMD", "")
@@ -124,28 +237,40 @@ for t in toks:
     except OSError:
         pass
 
-# Status option ids (.claude/rules/custom-fields.md). Names accepted too, for
-# `gh project item-edit` forms that spell the status out.
-OPTIONS = ["093793f1", "62ad3706", "2eec8df1", "0aa21637", "087e34a4"]
-NAMES = ["Implementation Complete", "Review Complete", "In Progress", "Backlog", "Deferred"]
-
 m = re.search(r"PVTI_[A-Za-z0-9_-]+", hay)
 item = m.group(0) if m else ""
 
-status = ""
-for o in OPTIONS:
-    if o in hay:
-        status = o
-        break
-if not status:
-    for n in NAMES:
-        if n in hay:
-            status = n
-            break
+# Without an item id, on-jira-transition would exit 0 anyway. Bail before doing any work.
+if not item:
+    raise SystemExit(1)
 
-# Without BOTH, on-jira-transition would exit 0 anyway. Bail here so the common case costs
-# nothing rather than spawning the whole sync for a no-op.
-if not item or not status:
+# Option NAMES, longest first so "Implementation Complete" wins over "Complete". These are
+# the stable identifiers; ids are not. Names are accepted anywhere in the haystack, which
+# also covers forms that spell the status out.
+NAMES = ["Implementation Complete", "Review Complete", "In Progress",
+         "Backlog", "Deferred", "Done"]
+
+status = ""
+for n in NAMES:
+    if n in hay:
+        status = n
+        break
+
+if not status:
+    table = {}
+    for line in (os.environ.get("OPTION_TABLE") or "").splitlines():
+        parts = line.split(None, 1)
+        if len(parts) == 2 and parts[0].strip() and parts[1].strip():
+            table[parts[0].strip()] = parts[1].strip()
+    ids = re.findall(r"\b[0-9a-f]{8}\b", hay)
+    for i in ids:
+        if i in table:
+            status = table[i]
+            break
+    if not status and ids:
+        raise SystemExit(2)
+
+if not status:
     raise SystemExit(1)
 
 print(json.dumps({
@@ -153,7 +278,15 @@ print(json.dumps({
     "tool_input": {"item_id": item, "status": status},
     "tool_response": {},
 }))
-' 2>/dev/null)" || exit 0
+'
+
+SYNTH="$(CMD="$CMD" OPTION_TABLE="$(options_table)" python3 -c "$SYNTH_PY" 2>/dev/null)"
+SYNTH_RC=$?
+if [ "$SYNTH_RC" -eq 2 ] && refresh_options; then
+  SYNTH="$(CMD="$CMD" OPTION_TABLE="$(cat "$OPTION_CACHE" 2>/dev/null)" python3 -c "$SYNTH_PY" 2>/dev/null)"
+  SYNTH_RC=$?
+fi
+[ "$SYNTH_RC" -eq 0 ] || exit 0
 [ -n "$SYNTH" ] || exit 0
 
 deliver "$SYNTH"
