@@ -81,6 +81,79 @@ containers from failing when the NAS isn't mounted.
 Docker Desktop crashes when containers have NAS SMB bind mounts during active writes (FUSE/gRPC
 bridge overwhelmed). Sequence: finish rclone writes → mount NAS → add container mounts.
 
+## One *bulk* NAS writer at a time (LAB-1407)
+
+**The rule: at most one BULK writer to `/Volumes/Personal-Drive` at any moment.**
+
+*Bulk* means a job that writes thousands of files, or gigabytes, in a burst: restic, an rclone sync,
+an imagery pull, a Wikipedia mirror, an Immich thumbnail or metadata run. It does **not** mean any
+write at all. A handful of phone uploads a day, or an SSE daemon appending a Parquet file every few
+minutes, is low-rate and does not contend for the smbfs mount.
+
+> **This restates the older wording, "one NAS writer at a time — serialize imagery/rclone/sync
+> jobs", which was already false when written.** `eventstreams-daemon`
+> (`stacks/wikipedia-stack.yml`) holds a **continuous `rw` bind** on
+> `/Volumes/Personal-Drive/homelab/wikipedia` and has since LAB-72 — a permanent second writer
+> living under a rule that forbade one. That matters beyond pedantry: a rule the fleet visibly
+> violates is read as advisory, and an advisory rule stops being consulted before the next
+> always-on writer is added. The narrower claim is the one that is actually true, so it is the one
+> worth defending.
+
+### The incidents this is derived from — not a principle, a pair of outages
+
+| Date | What happened | What was actually concurrent |
+|---|---|---|
+| 2026-04 | Docker Desktop crash loop, FUSE/gRPC bridge overwhelmed | Container SMB bind mounts added **while rclone was bulk-writing the same path** |
+| 2026-07-06 | The share wedged — mounted and dead at the same time (detection: #1406) | **Two containers writing concurrently** |
+
+Neither incident implicates "two writers". Both implicate **two bulk writers on smbfs at once**.
+
+### The 02:00–06:00 NAS write window and its occupants
+
+| Writer | Schedule | NAS path | Where it is defined |
+|---|---|---|---|
+| **restic (primary repo)** | **daily 02:00** | `homelab/backups/restic` | `internal/launchd/com.homelab.backup.plist` |
+| wikipedia-zim-sync | monthly 1st, 02:00 | `homelab/wikipedia` | n8n |
+| db-backup | daily 02:30 | MinIO (local only — **not** a NAS writer) | n8n |
+| **rclone gdrive-sync** | **daily 03:00, 12 h timeout** | `homelab/google-drive` | n8n |
+| gutenberg-sync | weekly Sun 03:00 | `homelab/books` | n8n |
+| restore-test (heavy *reader*) | weekly Sun 03:00 | restic repo | `internal/launchd/com.homelab.restore-test.plist` |
+| wikidump-sync | monthly 5th, 04:00 | `homelab/wikipedia` | n8n |
+| wikipedia-images-sync | monthly 10th, 06:00 | `homelab/wikipedia` | n8n |
+| **eventstreams-daemon** | **continuous** | `homelab/wikipedia` | `stacks/wikipedia-stack.yml` — low-rate, the standing exception |
+| Immich job queues | **paused 01:55–06:05** | `${IMMICH_MEDIA_PATH}` | `internal/n8n/workflows/immich-quiet-window.json` |
+| ~~sentinel2-native / naip / usgs-3dep~~ | ~~02:15 / 03:00 / 04:00~~ | ~~`homelab/imagery`~~ | **RETIRED** in the LAB-1258 launchd audit (Q4 TCC disqualification); intent carried to `fredabood/9215resort#60`. Re-landing them means re-entering this table |
+
+**02:00–03:00 is the busiest hour**, and `gdrive-sync` at 03:00 carries a **12-hour timeout**, so
+that slot can still be live at mid-morning. Anything new that writes the NAS in bulk must be
+scheduled against this table — "at night" is not a schedule.
+
+### The worked example: Immich
+
+Immich is the first *always-on* NAS writer the fleet has taken on, so it cannot be serialised by
+picking a time slot — it has to be told when not to write. `immich-quiet-window` pauses its seven
+job queues at 01:55 and resumes them at 06:05, with a 10:15 safety resume.
+
+It pauses the **queues, not the container**, and that distinction is the whole design: the API stays
+up, so the phone's background backup still succeeds during the window and derivatives are generated
+after 06:05. Stopping the container would fail mobile backup silently for four hours every night.
+
+No filesystem lock was added. `flock` is unreliable on smbfs, none of the existing writers takes
+one, and retrofitting a locking protocol onto six scripts to protect one new consumer buys less than
+a schedule does.
+
+### What this is not
+
+This is **not** a licence to add writers. The bulk/low-rate distinction narrows the rule to
+something true; it does not widen what is permitted. Before adding anything that writes the NAS:
+
+1. Say whether it is bulk or low-rate, and why — with a file count or a byte volume, not an adjective.
+2. If bulk: name the slot in the table above that it takes, and what it is now adjacent to.
+3. If continuous: it needs a quiet-window mechanism of its own, like Immich's. `eventstreams-daemon`
+   is grandfathered because it is low-rate, not because continuous writers are fine.
+4. Add the row to the table in the same change. A writer absent from this table is invisible to the
+   next person scheduling work, which is exactly how 02:00–03:00 got crowded.
+
 ## Networking changes
 
 - New services behind Caddy must bind to `0.0.0.0` (not `127.0.0.1`)
