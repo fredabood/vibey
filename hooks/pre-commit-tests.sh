@@ -70,7 +70,13 @@ suites="$(bash "$DISCOVER" 2>/dev/null || echo '[]')"
 owners=""
 while IFS= read -r dir; do
   [ -n "$dir" ] || continue
-  if printf '%s\n' "$staged" | grep -q "^$dir/"; then
+  # A herestring, NOT `printf '%s\n' "$staged" | grep -q` (LAB-1603). Under the
+  # `pipefail` at the top of this file, `grep -q` closes the pipe on its first match and
+  # `printf` takes SIGPIPE, so the membership test reported FALSE exactly when the
+  # component DID own a staged file — the suite would be skipped for the very commit it
+  # was meant to gate. `$staged` is one line per staged path, so a large refactor is
+  # precisely when it would have fired.
+  if grep -q "^$dir/" <<<"$staged"; then
     owners="$owners$dir
 "
   fi

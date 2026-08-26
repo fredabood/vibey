@@ -113,6 +113,85 @@ for reason_rc in "completed:2" "not_planned:0"; do
   fi
 done
 
+# =====================================================================================
+# LAB-1603 — allow path 2 must survive a comment payload larger than the pipe buffer.
+#
+# `$COMMENTS` is EVERY comment on the issue, `--paginate`d and concatenated, so it grows
+# without bound as an issue is discussed. The gate used to test it with
+# `printf '%s' "$COMMENTS" | grep -q '## Verification Report'`. Under this hook's
+# `set -euo pipefail`, `grep -q` exits at its FIRST match and closes the pipe; `printf`
+# takes SIGPIPE with the rest of the payload unwritten; `pipefail` promotes that to the
+# pipeline's status. So the test reported FALSE exactly when the marker WAS present, and
+# the gate refused a close whose Verification Report existed — telling the operator to
+# post a comment that was already there.
+#
+# It is a scheduling race, latent below 64 KiB and deterministic above it, which is why
+# the sizes below straddle the buffer rather than picking one. The marker is emitted
+# FIRST on purpose: that is the shape that SIGPIPEs the producer, because grep can exit
+# while most of the payload is still unwritten.
+#
+# These assertions FAILED against the unfixed hook at 200000 and 1000000 bytes (rc=2,
+# block) and pass at every size after it. A size that only ever passes would prove
+# nothing, so the small sizes are controls, not coverage.
+echo "== allow path 2 survives a >64 KiB comment payload (LAB-1603) =="
+
+BIGSTUB="$SANDBOX/bigbin"
+mkdir -p "$BIGSTUB"
+cat > "$BIGSTUB/gh" <<'STUBEOF'
+#!/usr/bin/env bash
+# Emits FAKE_BYTES of comment body with the report marker at the very start.
+case "$*" in
+  *comments*)
+    printf '%s\n' "## Verification Report"
+    printf '%s\n' "### Criteria Tested"
+    n=$(( ${FAKE_BYTES:-200000} / 64 ))
+    i=0
+    while [ "$i" -lt "$n" ]; do
+      printf 'lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiu\n'
+      i=$((i + 1))
+    done
+    ;;
+  *) exit 0 ;;
+esac
+STUBEOF
+chmod +x "$BIGSTUB/gh"
+
+clear_marker
+for bytes in 2000 40000 200000 1000000; do
+  printf '%s' "$(mcp_payload closed completed homelab 1603)" \
+    | env PATH="$BIGSTUB:$PATH" FAKE_BYTES="$bytes" bash "$HOOK" >/dev/null 2>&1
+  rc=$?
+  if [ "$rc" = 0 ]; then
+    ok "verification report is found in a ${bytes}-byte payload"
+  else
+    no "verification report is found in a ${bytes}-byte payload" \
+       "expected rc=0 (allow), got rc=$rc — the SIGPIPE wedge is back"
+  fi
+done
+
+# The converse, at the same size: no marker anywhere must still BLOCK. Without this, a
+# hook that unconditionally allowed would pass every assertion above.
+cat > "$BIGSTUB/gh" <<'STUBEOF'
+#!/usr/bin/env bash
+case "$*" in
+  *comments*)
+    n=$(( ${FAKE_BYTES:-200000} / 64 ))
+    i=0
+    while [ "$i" -lt "$n" ]; do
+      printf 'lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiu\n'
+      i=$((i + 1))
+    done
+    ;;
+  *) exit 0 ;;
+esac
+STUBEOF
+chmod +x "$BIGSTUB/gh"
+
+printf '%s' "$(mcp_payload closed completed homelab 1603)" \
+  | env PATH="$BIGSTUB:$PATH" FAKE_BYTES=200000 bash "$HOOK" >/dev/null 2>&1
+[ $? = 2 ] && ok "a large payload with NO report still blocks" \
+            || no "a large payload with NO report still blocks" "expected rc=2"
+
 echo
 echo "lifecycle-field-check tests: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
