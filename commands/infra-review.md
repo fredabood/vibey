@@ -11,7 +11,7 @@ Act as the infra-reviewer agent (see `.claude/agents/infra-reviewer.md` for full
    Read Prometheus directly, not Alertmanager: Alertmanager routes `severity: warning`
    to a `null` receiver by design (LAB-1297), so its API would hide exactly the
    lower-severity findings this review exists to catch. Only `severity: critical`
-   reaches Slack; everything else is yours to triage here.
+   reaches Buzz `#alerts`; everything else is yours to triage here.
 
 2. **Container health:**
    ```bash
@@ -82,7 +82,7 @@ Follow the analysis framework in the infra-reviewer agent definition:
 ## Step 3: Act on findings
 
 ### If all clear:
-- Do nothing. No Slack message. No Jira ticket. Silent success.
+- Do nothing. No Buzz message. No GitHub issue. Silent success.
 
 ### If real issues found (P1–P3):
 
@@ -96,7 +96,7 @@ For each distinct root cause:
    - Labels: appropriate work pattern + infrastructure layer
    - Priority: P1=Highest, P2=High, P3=Medium
 
-4. If P1 or P2: Post ONE Slack summary message with Jira links and recommended immediate action
+4. If P1 or P2: Post ONE Buzz summary message with issue links and recommended immediate action
 
 ## Step 4: Log the review
 
