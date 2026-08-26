@@ -259,6 +259,29 @@ expect "Edit on ~/.claude/settings.json blocked" 2 "$GATE" "$(edit_payload "$HOM
 expect "Edit on the installed gate blocked even from a worktree" 2 "$GATE" "$(edit_payload "$HOME/.claude/hooks/worktree-gate.sh" "$SANDBOX/wt")"
 expect "Edit on the canonical repo copy allowed from a worktree" 0 "$GATE" "$(edit_payload "$SANDBOX/wt/.claude/hooks/worktree-gate.sh" "$SANDBOX/wt")"
 
+# =================================== user-level ~/.claude is not the submodule (LAB-1649)
+# #1649 reported that this gate matches the path FRAGMENT `.claude/` and therefore blocks the
+# user's config directory, mistaking it for the repo's `.claude` submodule. Measured, it does
+# not: every path test here is wf_path_inside containment, and the anti-self-tamper case above
+# matches four literal paths rather than a prefix. The refusal that issue reported came from
+# Claude Code's own worktree isolation, one layer BELOW this hook. The tell is cheap — every
+# refusal from this gate is prefixed `[worktree-gate] BLOCKED:`, and that one was not.
+#
+# The PRIMARY-cwd rows are the load-bearing ones. In WORKTREE mode the gate short-circuits
+# (`case "$MODE" in … WORKTREE) exit 0`) ~90 lines ABOVE its Edit rules, so a fragment match
+# reintroduced later would not even be REACHABLE from a worktree payload — it would go red
+# only here. A worktree-only test would stay green while the bug was back, which is why the
+# obvious spelling of this test is the useless one.
+echo "user-level ~/.claude is not the repo's .claude submodule (LAB-1649):"
+expect "Write on ~/.claude/plans allowed from the primary checkout" 0 "$GATE" \
+  "$(edit_payload "$HOME/.claude/plans/lab1649-probe.md" "$PRIMARY" Write)"
+expect "Write on the ~/.claude/jobs scratchpad allowed from the primary checkout" 0 "$GATE" \
+  "$(edit_payload "$HOME/.claude/jobs/lab1649/tmp/probe.md" "$PRIMARY" Write)"
+expect "Write on ~/.claude/plans allowed from a worktree" 0 "$GATE" \
+  "$(edit_payload "$HOME/.claude/plans/lab1649-probe.md" "$SANDBOX/wt" Write)"
+expect "Write on the repo's OWN .claude still blocked from the primary checkout" 2 "$GATE" \
+  "$(edit_payload "$PRIMARY/.claude/rules/lab1649-probe.md" "$PRIMARY" Write)"
+
 # ================================================== nested worktree messaging
 # A worktree living under .claude/worktrees/ is physically inside the primary checkout.
 # Reaching into it from a primary-checkout session must still be blocked, but with the
