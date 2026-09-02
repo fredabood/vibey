@@ -12,6 +12,17 @@ All implementation work is tracked in GitHub Issues by default. Follow these beh
 
 **Repo routing:** Infer the target repo from the work context:
 - Working in the homelab repo root or `stacks/`, `internal/`, `.claude/` → **`fredabood/homelab`** (keys `LAB-<n>`; `HL-*` prefix deprecated 2026-07-12, LAB-963)
+  > **Not when the work serves exactly one L4 domain (LAB-1731).** Routing answers "where does the
+  > code live"; the placement tree in `.claude/rules/label-taxonomy.md` answers "where does the
+  > issue belong". **Placement wins.** Homelab-resident code serving a single domain is tracked in
+  > that domain's repo, and the PR — which must live where the code is — closes it cross-repo with
+  > `Closes fredabood/<repo>#<n>`.
+  >
+  > This clause exists because the rule predates the situation. It was written when domain code
+  > lived under `submodules/<domain>/` and nothing domain-shaped lived in `internal/`. That is no
+  > longer true: the 9215 Resort Dr imagery pipeline and viewer are entirely in `internal/` and
+  > tracked as `RESORT-*`, and `stacks/data-platform-stack.yml` cites `RESORT-63` in a comment.
+  > Following routing literally split one programme across two trackers.
 - Working in `submodules/dirtydata/` or on DRTY-prefixed issues → **`fredabood/dirtydata`** (keys `DRTY-<n>`; `DD-*` deprecated)
 - Working in `submodules/9215resort/` or on RESORT-prefixed issues → **`fredabood/9215resort`** (keys `RESORT-<n>`; the LAB-221 + LAB-228 trees transferred here 2026-07-12 — old↔new map in `public.resort_transfer_key_map`, LAB-962)
 
