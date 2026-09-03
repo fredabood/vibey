@@ -42,7 +42,18 @@ PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(cd "$HOOK_DIR/../.." && pwd)}"
 
 # The sync target lives in the HOMELAB repo, not in this one — .claude is a submodule and is
 # usable standalone. Absent target = nothing to do, and that is not an error.
-TRANSITION_HOOK="${JIRA_GRAPH_TRANSITION_HOOK:-$PROJECT_DIR/submodules/jira-graph/bin/on-jira-transition}"
+#
+# Moved 2026-09-03 (LAB-1470): `fredabood/jira-graph` was absorbed into `fredabood/work` at
+# `frozen/jira-graph` and deleted, so `submodules/jira-graph` no longer exists. homelab still
+# reaches the script, one level deeper, through its `submodules/work` gitlink.
+#
+# BE CAREFUL EDITING THIS PATH. Every path below exits 0 by design, so a wrong value here is
+# indistinguishable from a working one at the call site — nothing logs, nothing alerts, and the
+# only symptom is board-status freshness silently dropping from ~1s to the 10-minute
+# github-full-sync sweep, which is the window where TWO AGENTS CAN CLAIM THE SAME ISSUE. Verify a
+# change by making a board transition and watching the mirror, never by observing that the hook
+# ran without error.
+TRANSITION_HOOK="${JIRA_GRAPH_TRANSITION_HOOK:-$PROJECT_DIR/submodules/work/frozen/jira-graph/bin/on-jira-transition}"
 
 PAYLOAD="$(cat 2>/dev/null || true)"
 [ -n "$PAYLOAD" ] || exit 0
