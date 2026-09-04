@@ -40,6 +40,7 @@ Source of truth for service names, URLs, and ports: `internal/caddy/Caddyfile` a
 | Mealie | mealie | mealie.dirtydata.studio | mealie:9000 | Recipe manager | REST API |
 | Twenty CRM | twenty-server | crm.dirtydata.studio | twenty-server:3000 | Self-hosted CRM | Web UI + REST API |
 | Jira-Graph | jira-graph | jira.dirtydata.studio (**tailnet-gated**, LAB-1008 — DNS-only A → mini Tailscale IP, NOT the CF tunnel; caddy host 443 published only on the Tailscale IP; DNS-01 cert) | jira-graph:8090 | Issue & program visualizer (GitHub-backed) | FastAPI REST; mutations authorized by tailnet transport (Caddy attaches `X-Service-Token`, op://Homelab "Jira Graph Service Token") or `Tailscale-User-Login` ∈ `WRITE_ALLOWED` |
+| Work | work-graph | work.dirtydata.studio (**tailnet-gated**, LAB-1781 — DNS-only A → mini Tailscale IP, a *specific* record overriding the proxied `*.dirtydata.studio` wildcard; DNS-01 cert) | work-graph:8090 (**no host port** — Caddy reaches it over the docker network; `jira-graph` publishes `127.0.0.1:8090` only because `.claude/hooks/jira-graph-sync.sh` PATCHes it over loopback, and this instance has no such caller) | The SAME application as Jira-Graph above, run from a second container off the image `fredabood/work` publishes out of `frozen/jira-graph`. Deployed as the gate before the absorbed repos are deleted: it proves a COLD deploy from the new source home. **Outlives the row above** — work#228 retires jira-graph once its Prometheus scrape target is re-homed, and the work app's own frontend lands here at milestone v0.2.5 | FastAPI REST; same write posture and same `JIRA_GRAPH_*` variables as Jira-Graph — deliberately no new env var, so nothing is left in `.env.tpl` if this is retired |
 | ~~SearXNG~~ | ~~searxng~~ | ~~search.dirtydata.studio~~ | ~~searxng:8080~~ | ~~Private search~~ | DECOMMISSIONED 2026-04-05 |
 | FreshRSS | freshrss | rss.dirtydata.studio | freshrss:80 | RSS reader | Web UI + Fever API |
 | Calibre-Web | calibre-web | books.dirtydata.studio | calibre-web:8083 | Ebook library | Web UI |
@@ -166,6 +167,7 @@ The staging API gateway (`staging-api.dirtydata.studio`) additionally routes `/s
   - `media-stack.yml` — Jellyfin, Sonarr, Radarr, Prowlarr, Mealie
   - `crm-stack.yml` — Twenty CRM
   - `jira-graph-stack.yml` — jira-graph (dependency visualization, reads from jira.* schema)
+  - `work-stack.yml` — work-graph (LAB-1781; the SAME image as jira-graph, second instance at work.dirtydata.studio. `deploy-policy.sh` refuses it under the key **`work`**, not `work-stack` — `affected-stacks.sh` derives a stack's name by stripping `-stack.yml`, so a refusal keyed on the filename would never match and the deploy would attempt a pull it has no credential for)
   - `smarthome-stack.yml` — (decommissioned 2026-04-03, LAB-119 Won't Do)
   - `privacy-stack.yml` — SearXNG, FreshRSS, Calibre-Web, Radicale
   - `immich-stack.yml` — Immich
