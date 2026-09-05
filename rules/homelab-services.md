@@ -165,7 +165,7 @@ The staging API gateway (`staging-api.dirtydata.studio`) additionally routes `/s
   - `data-platform-stack.yml` — MLflow, n8n, qBittorrent (via gluetun), and the imagery downloader sidecars: earthdata-downloader, naip-downloader, sentinel2-downloader, usgs-3dep-downloader (all sleep-idle, driven by `docker exec` from n8n)
   - `media-stack.yml` — Jellyfin, Sonarr, Radarr, Prowlarr, Mealie
   - `crm-stack.yml` — Twenty CRM
-  - `work-stack.yml` — work-graph (LAB-1781; the SAME image as jira-graph, second instance at work.dirtydata.studio. `deploy-policy.sh` refuses it under the key **`work`**, not `work-stack` — `affected-stacks.sh` derives a stack's name by stripping `-stack.yml`, so a refusal keyed on the filename would never match and the deploy would attempt a pull it has no credential for)
+  - `work-stack.yml` — work-graph (LAB-1781; the jira-graph application at work.dirtydata.studio, and since 2026-09-04 its only deployment — `jira-graph-stack.yml` is retired to `.deprecated` per work#228. `deploy-policy.sh` refuses it under the key **`work`**, not `work-stack` — `affected-stacks.sh` derives a stack's name by stripping `-stack.yml`, so a refusal keyed on the filename would never match and the deploy would attempt a pull it has no credential for)
   - `smarthome-stack.yml` — (decommissioned 2026-04-03, LAB-119 Won't Do)
   - `privacy-stack.yml` — SearXNG, FreshRSS, Calibre-Web, Radicale
   - `immich-stack.yml` — Immich
