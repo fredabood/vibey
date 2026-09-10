@@ -1,27 +1,30 @@
-# OS
-.DS_Store
-Thumbs.db
+# Deny-all with an explicit allowlist.
+#
+# ~/.claude is BOTH this repo's checkout and Claude Code's live runtime
+# directory: session transcripts, prompt history, plans, caches and per-project
+# auto-memory all accrete here. An ignore list that enumerates runtime dirs goes
+# stale the moment the CLI adds a new one, and the failure mode is publishing
+# session content to a PUBLIC repo. So: ignore everything, then re-admit the
+# handful of directories that are actually shared config.
+/*
 
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
+!/.gitignore
+!/agents/
+!/commands/
+!/rules/
+!/skills/
+!/hooks/
+!/README.md
+!/LICENSE
 
-# Temporary
-*.tmp
+# settings.json is deliberately NOT tracked. It carries machine-local
+# configuration — internal hostnames, private subdomains, object-store buckets
+# and database schema names — and this repo is public. Keep user settings
+# machine-local; the repo is a portable toolkit, not a settings store.
+
+# Never share, even from an allowlisted directory.
 *.log
 *.bak
-.cache/
-
-# Project-specific local files (not part of shared config)
-settings.local.json
-.mcp.json
-worktrees/
-
-# Skill execution context marker (ephemeral, used by atlassian-skill-gate hook)
+*.bak.*
+.DS_Store
 .skill-execution-context.json
-
-# Claude session data (per-project transcripts) — machine-local, never shared config
-projects/

@@ -16,7 +16,7 @@ Two memory systems exist. Each has a clear purpose — do not cross the boundary
 - `reference` type: pointers to external resources
 - `project` type: lightweight ongoing-work context
 
-**Vault** (`submodules/memory/`) — durable project knowledge:
+**Vault** (`$MEMORY_VAULT_PATH/`) — durable project knowledge:
 
 | Content type | Vault directory |
 |---|---|

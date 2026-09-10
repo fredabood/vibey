@@ -6,7 +6,7 @@ user_invocable: true
 
 # /vault-add
 
-Create a new note in the Obsidian vault (`submodules/memory/`) with correct structure, frontmatter, and cross-references.
+Create a new note in the Obsidian vault (`$MEMORY_VAULT_PATH/`) with correct structure, frontmatter, and cross-references.
 
 ## Usage
 
@@ -27,13 +27,13 @@ Create a new note in the Obsidian vault (`submodules/memory/`) with correct stru
 
 1. Extract the title from the arguments.
 2. If `--type` is provided, map to the target directory:
-   - `knowledge` → `submodules/memory/homelab/knowledge/` (may prompt for subcategory)
-   - `decision` → `submodules/memory/homelab/decisions/`
-   - `research` → `submodules/memory/homelab/research/`
-   - `session` → `submodules/memory/homelab/sessions/`
-   - `milestone` → `submodules/memory/homelab/milestones/`
-   - `planning` → `submodules/memory/homelab/planning/`
-   - `context` → `submodules/memory/homelab/context/`
+   - `knowledge` → `$MEMORY_VAULT_PATH/homelab/knowledge/` (may prompt for subcategory)
+   - `decision` → `$MEMORY_VAULT_PATH/homelab/decisions/`
+   - `research` → `$MEMORY_VAULT_PATH/homelab/research/`
+   - `session` → `$MEMORY_VAULT_PATH/homelab/sessions/`
+   - `milestone` → `$MEMORY_VAULT_PATH/homelab/milestones/`
+   - `planning` → `$MEMORY_VAULT_PATH/homelab/planning/`
+   - `context` → `$MEMORY_VAULT_PATH/homelab/context/`
 3. If `--type` is not provided, ask the user which type fits.
 4. For `knowledge` type, list existing subcategories (subdirectories of `homelab/knowledge/`) and ask which one to use, or offer to create a new one.
 
@@ -154,7 +154,7 @@ Run `/obsidian-lint <path-to-new-file>` to validate the note passes all checks.
 
 Stage and commit the new file in the memory submodule:
 ```
-cd submodules/memory && git add <file> && git commit -m "KEY-XXX: Add <title> to vault"
+cd $MEMORY_VAULT_PATH && git add <file> && git commit -m "KEY-XXX: Add <title> to vault"
 ```
 
 Use the active Jira ticket key if one exists, otherwise use a descriptive message.

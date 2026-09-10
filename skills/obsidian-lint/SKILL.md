@@ -11,23 +11,23 @@ Lint an Obsidian vault for structural issues: frontmatter validation, wikilink c
 ## Usage
 
 ```
-/obsidian-lint              → lint entire vault (default: submodules/memory/)
+/obsidian-lint              → lint entire vault (default: $MEMORY_VAULT_PATH/)
 /obsidian-lint <path>       → lint specific file or folder
 /obsidian-lint --fix        → auto-apply safe fixes
 ```
 
 Examples:
 
-- `/obsidian-lint` — scan the full vault at `submodules/memory/`
-- `/obsidian-lint submodules/memory/operations/` — scan only the operations directory
+- `/obsidian-lint` — scan the full vault at `$MEMORY_VAULT_PATH/`
+- `/obsidian-lint $MEMORY_VAULT_PATH/operations/` — scan only the operations directory
 - `/obsidian-lint --fix` — fix all auto-fixable issues across the vault
-- `/obsidian-lint submodules/memory/knowledge/some-note.md --fix` — fix a single file
+- `/obsidian-lint $MEMORY_VAULT_PATH/knowledge/some-note.md --fix` — fix a single file
 
 ## Steps
 
 ### Step 1: Resolve target path
 
-1. If no path argument is given, default to `submodules/memory/` relative to the repository root.
+1. If no path argument is given, default to `$MEMORY_VAULT_PATH/` relative to the repository root.
 2. If a path is given, resolve it relative to the repository root.
 3. Verify the path exists and contains `.md` files.
 4. Collect all `.md` files in the target (recursively if directory).

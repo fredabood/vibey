@@ -13,14 +13,26 @@
 
 set -euo pipefail
 
-# Only run once per session (track with a temp file)
-SESSION_MARKER="/tmp/.memory-access-tracked-$$"
-if [ -f "$SESSION_MARKER" ]; then
-    exit 0
-fi
+# Run at most once per project per day.
+#
+# This used to key the marker on "$$" — the hook's OWN pid, which is different on
+# every invocation, so the marker never matched and the "once per session" guard
+# never fired. The hook was registered nowhere, so it never ran and the defect was
+# never observed; re-registering it without this fix would rewrite frontmatter on
+# every memory file on every prompt.
 
-MEMORY_DIR="$HOME/.claude/projects/-Users-fredabood-homelab/memory"
+# Derive the auto-memory dir from the CURRENT project, not a hardcoded one.
+# This used to be pinned to -Users-fredabood-homelab, so it silently no-opped in
+# every worktree and in every other repo — which, after the 2026-09-10
+# de-monorepo split, is most sessions. Claude Code slugifies the project path by
+# replacing every "/" with "-", so /Users/fredabood/homelab becomes
+# -Users-fredabood-homelab.
+PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$PWD}"
+PROJECT_SLUG="${PROJECT_ROOT//\//-}"
+MEMORY_DIR="$HOME/.claude/projects/$PROJECT_SLUG/memory"
 TODAY=$(date +%Y-%m-%d)
+SESSION_MARKER="/tmp/.memory-access-tracked-${PROJECT_SLUG}-${TODAY}"
+[ -f "$SESSION_MARKER" ] && exit 0
 
 # Only process if the memory directory exists
 if [ ! -d "$MEMORY_DIR" ]; then

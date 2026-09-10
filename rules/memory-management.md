@@ -43,6 +43,13 @@ Save immediately when these occur — don't defer to session end:
 ## Two-System Boundary
 
 **Auto-memory** (`~/.claude/projects/.../memory/`) answers: "How should Claude behave?"
-**Vault** (`submodules/memory/`) answers: "What does the project know?"
+**Vault** (`$MEMORY_VAULT_PATH/`) answers: "What does the project know?"
+
+`$MEMORY_VAULT_PATH` is exported from `~/.dotfiles/zsh/.zshenv` and resolves to
+`~/Repositories/memory` — the standalone `fredabood/memory.md` repo. It was
+`homelab/submodules/memory` until the 2026-09-10 de-monorepo split. The vault
+stays ONE central repo across every project (`homelab/`, `projects/<name>/`)
+rather than splitting per-repo: cross-project linking and a single Postgres
+embedding index are the reason it exists.
 
 Don't cross the boundary. User preferences go to auto-memory. Project decisions go to the vault.
